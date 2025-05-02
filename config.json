@@ -4,5 +4,11 @@
   "aws_bucket": "your-s3-bucket-name",
   "aws_region": "us-east-1",
   "aws_access_key": "YOUR_AWS_ACCESS_KEY",
-  "aws_secret_key": "YOUR_AWS_SECRET_KEY"
+  "aws_secret_key": "YOUR_AWS_SECRET_KEY",
+  "alert_email": "alerts@yourdomain.com",
+  "smtp_server": "smtp.postmarkapp.com",
+  "smtp_port": "587",
+  "smtp_user": "your-postmark-username",
+  "smtp_pass": "your-postmark-password",
+  "monitor_token": "your_secure_token"
 }

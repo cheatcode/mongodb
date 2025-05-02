@@ -25,15 +25,34 @@ AWS_BUCKET=$(jq -r '.aws_bucket' "$CONFIG_FILE")
 AWS_REGION=$(jq -r '.aws_region' "$CONFIG_FILE")
 AWS_ACCESS_KEY=$(jq -r '.aws_access_key' "$CONFIG_FILE")
 AWS_SECRET_KEY=$(jq -r '.aws_secret_key' "$CONFIG_FILE")
+ALERT_EMAIL=$(jq -r '.alert_email' "$CONFIG_FILE")
+SMTP_SERVER=$(jq -r '.smtp_server' "$CONFIG_FILE")
+SMTP_PORT=$(jq -r '.smtp_port' "$CONFIG_FILE")
+SMTP_USER=$(jq -r '.smtp_user' "$CONFIG_FILE")
+SMTP_PASS=$(jq -r '.smtp_pass' "$CONFIG_FILE")
+MONITOR_TOKEN=$(jq -r '.monitor_token' "$CONFIG_FILE")
 
 # Install required packages
 wget -qO - https://www.mongodb.org/static/pgp/server-$MONGO_VERSION.asc | sudo apt-key add -
 echo "deb [ arch=amd64 ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/$MONGO_VERSION multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-$MONGO_VERSION.list
 sudo apt update
-sudo apt install -y mongodb-org nginx certbot python3-certbot-nginx logrotate awscli jq ufw
+sudo apt install -y mongodb-org nginx certbot python3-certbot-nginx logrotate awscli jq ufw micro msmtp msmtp-mta bsd-mailx fcgiwrap
 
-# Install micro editor
-sudo apt install -y micro
+# Configure msmtp (SMTP email)
+cat <<EOF | sudo tee /etc/msmtprc
+defaults
+auth on
+tls on
+tls_trust_file /etc/ssl/certs/ca-certificates.crt
+account default
+host $SMTP_SERVER
+port $SMTP_PORT
+user $SMTP_USER
+password $SMTP_PASS
+from $ALERT_EMAIL
+logfile ~/.msmtp.log
+EOF
+chmod 600 /etc/msmtprc
 
 # Create Mongo keyfile if missing
 if [ ! -f "$MONGO_KEYFILE" ]; then
@@ -42,7 +61,7 @@ if [ ! -f "$MONGO_KEYFILE" ]; then
   chown mongodb:mongodb "$MONGO_KEYFILE"
 fi
 
-# Configure mongod.conf to bind only to localhost
+# Configure mongod.conf
 cat <<EOF | sudo tee $MONGO_CONF
 storage:
   dbPath: /var/lib/mongodb
@@ -67,13 +86,13 @@ EOF
 sudo systemctl enable mongod
 sudo systemctl restart mongod
 
-# Wait for mongod to fully start
+# Wait for MongoDB to start
 sleep 10
 
-# Create admin/root user
+# Create admin user
 mongo --eval "db.getSiblingDB('admin').createUser({ user: '$DB_USERNAME', pwd: '$DB_PASSWORD', roles: [ { role: 'root', db: 'admin' } ] })" || echo "Admin user may already exist, skipping creation."
 
-# Get Let's Encrypt SSL certificate
+# Get SSL cert
 sudo certbot certonly --nginx --non-interactive --agree-tos --email admin@$DOMAIN -d $DOMAIN
 
 # Configure Nginx SSL proxy
@@ -92,12 +111,12 @@ stream {
 EOF
 
 sudo ln -sf $NGINX_CONF /etc/nginx/sites-enabled/mongo_ssl
-sudo nginx -s reload
+sudo systemctl reload nginx
 
-# Setup automatic SSL renewals
+# Set up SSL renew cron
 echo "0 3 * * * root certbot renew --nginx --quiet" | sudo tee /etc/cron.d/certbot-renew
 
-# Configure log rotation for MongoDB
+# Setup logrotate
 cat <<EOF | sudo tee /etc/logrotate.d/mongod
 $LOG_FILE {
   daily
@@ -118,7 +137,7 @@ aws configure set aws_access_key_id $AWS_ACCESS_KEY
 aws configure set aws_secret_access_key $AWS_SECRET_KEY
 aws configure set region $AWS_REGION
 
-# Setup backups only on primary node
+# Backups only on primary
 if [ "$ROLE" == "primary" ]; then
   HOSTNAME=$(hostname -f)
   cat <<EOF | sudo tee $BACKUP_SCRIPT
@@ -142,11 +161,61 @@ EOF
   echo "0 2 * * * root $BACKUP_SCRIPT" | sudo tee /etc/cron.d/mongo-backup
 fi
 
-# Setup UFW firewall
+# Setup health check cron
+cat <<EOF | sudo tee /usr/local/bin/mongo_health_check.sh
+#!/bin/bash
+if ! pgrep mongod > /dev/null; then
+  echo "MongoDB is DOWN on \$(hostname -f)" | mail -s "MongoDB DOWN ALERT" $ALERT_EMAIL
+fi
+EOF
+chmod +x /usr/local/bin/mongo_health_check.sh
+echo "*/5 * * * * root /usr/local/bin/mongo_health_check.sh" | sudo tee /etc/cron.d/mongo-health-check
+
+# Setup /monitor endpoint
+cat <<EOF | sudo tee /usr/local/bin/mongo_monitor.sh
+#!/bin/bash
+read QUERY_STRING
+TOKEN_VALUE=\$(echo \$QUERY_STRING | sed -n 's/.*token=\\([^&]*\\).*/\\1/p')
+if [ "\$TOKEN_VALUE" != "$MONITOR_TOKEN" ]; then
+  echo -e "HTTP/1.1 403 Forbidden\\n"
+  echo "Forbidden"
+  exit 0
+fi
+MEM=\$(free -m | awk '/Mem:/ {print \$3"/"\$2" MB"}')
+CPU=\$(top -bn1 | grep "Cpu(s)" | awk '{print \$2 + \$4 "%"}')
+DISK=\$(df -h / | awk 'NR==2 {print \$3"/"\$2}')
+echo -e "HTTP/1.1 200 OK\\n"
+echo "Memory: \$MEM"
+echo "CPU: \$CPU"
+echo "Disk: \$DISK"
+EOF
+chmod +x /usr/local/bin/mongo_monitor.sh
+
+# Nginx config for monitor
+cat <<EOF | sudo tee /etc/nginx/sites-available/mongo_monitor
+server {
+  listen 80;
+  server_name $DOMAIN;
+
+  location /monitor {
+    fastcgi_pass unix:/var/run/fcgiwrap.socket;
+    include fastcgi_params;
+    fastcgi_param SCRIPT_FILENAME /usr/local/bin/mongo_monitor.sh;
+  }
+}
+EOF
+
+sudo ln -sf /etc/nginx/sites-available/mongo_monitor /etc/nginx/sites-enabled/mongo_monitor
+sudo systemctl reload nginx
+sudo systemctl enable fcgiwrap
+sudo systemctl start fcgiwrap
+
+# Setup UFW
 sudo ufw allow ssh
 sudo ufw allow 443/tcp
+sudo ufw allow 80/tcp
 sudo ufw deny 27017
 sudo ufw --force enable
 
 echo "✅ MongoDB $ROLE node setup complete on $DOMAIN"
-echo "✅ micro editor installed — you can run 'micro <file>' to edit configs easily"
+echo "✅ micro editor installed — run 'micro <file>' to edit configs easily"
