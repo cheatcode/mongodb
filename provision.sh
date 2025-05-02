@@ -32,6 +32,9 @@ echo "deb [ arch=amd64 ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/$
 sudo apt update
 sudo apt install -y mongodb-org nginx certbot python3-certbot-nginx logrotate awscli jq ufw
 
+# Install micro editor
+sudo apt install -y micro
+
 # Create Mongo keyfile if missing
 if [ ! -f "$MONGO_KEYFILE" ]; then
   openssl rand -base64 756 > "$MONGO_KEYFILE"
@@ -67,7 +70,7 @@ sudo systemctl restart mongod
 # Wait for mongod to fully start
 sleep 10
 
-# Create admin/root user (ignore error if already exists)
+# Create admin/root user
 mongo --eval "db.getSiblingDB('admin').createUser({ user: '$DB_USERNAME', pwd: '$DB_PASSWORD', roles: [ { role: 'root', db: 'admin' } ] })" || echo "Admin user may already exist, skipping creation."
 
 # Get Let's Encrypt SSL certificate
@@ -146,3 +149,4 @@ sudo ufw deny 27017
 sudo ufw --force enable
 
 echo "✅ MongoDB $ROLE node setup complete on $DOMAIN"
+echo "✅ micro editor installed — you can run 'micro <file>' to edit configs easily"

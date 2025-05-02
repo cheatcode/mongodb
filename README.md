@@ -72,6 +72,29 @@ Example:
   "aws_secret_key": "YOUR_AWS_SECRET_KEY"
 }
 
-## License
+## Using micro to edit files
 
-MIT License
+This script installs [micro](https://micro-editor.github.io), a modern terminal-based editor with mouse support.
+
+Basic commands:
+
+- Edit a file:
+  micro <filename>
+
+- Example:
+  micro /etc/mongod.conf
+
+Mouse actions:
+
+- Click to move the cursor
+- Click and drag to select text
+- Scroll to move up/down
+- Right-click for menu (if enabled)
+
+Other shortcuts:
+
+- Ctrl+S → save
+- Ctrl+Q → quit
+- Ctrl+E → command menu
+
+micro works great if you want an easier, mouse-driven alternative to nano, vim, or vi.
