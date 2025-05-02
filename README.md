@@ -12,6 +12,10 @@ mongodb/
 ├── restore_backup.sh
 └── README.md
 
+## DNS
+
+1. Once the server is provisioned, point the domain at the instance so we can provision SSL during setup.
+
 ## Setup
 
 1. Update `config.json` with your credentials.
@@ -69,7 +73,13 @@ Example:
   "aws_bucket": "your-s3-bucket-name",
   "aws_region": "us-east-1",
   "aws_access_key": "YOUR_AWS_ACCESS_KEY",
-  "aws_secret_key": "YOUR_AWS_SECRET_KEY"
+  "aws_secret_key": "YOUR_AWS_SECRET_KEY",
+  "alert_email": "alerts@yourdomain.com",
+  "smtp_server": "smtp.postmarkapp.com",
+  "smtp_port": "587",
+  "smtp_user": "your-postmark-username",
+  "smtp_pass": "your-postmark-password",
+  "monitor_token": "your_secure_token"
 }
 
 ## Using micro to edit files
