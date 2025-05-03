@@ -197,9 +197,10 @@ The monitoring script sets up email alerts and a monitoring endpoint for your Mo
 2. **What the monitoring script does**:
    - Installs required dependencies (msmtp, nginx, fcgiwrap)
    - Configures email alerts via SMTP
-   - Sets up health checks that run every 5 minutes
+   - Sets up health checks that run every 30 seconds
    - Creates a monitoring endpoint accessible via HTTP
    - Configures nginx to serve the monitoring endpoint
+   - Sends alerts when MongoDB goes down AND when it comes back up
 
 3. **Access the monitoring endpoint**:
 
@@ -210,17 +211,20 @@ The monitoring script sets up email alerts and a monitoring endpoint for your Mo
 
    Replace `your_secure_monitor_token` with the value you set in `config.json`.
 
-4. **Test email alerts**:
+4. **Email alerts**:
 
-   You can test if email alerts are working by temporarily stopping MongoDB:
+   The monitoring system will:
+   - Check MongoDB status every 30 seconds
+   - Send an alert email when MongoDB goes down
+   - Send another alert email when MongoDB comes back up
+
+   You can test this by temporarily stopping and starting MongoDB:
 
    ```bash
+   # Stop MongoDB to trigger a DOWN alert
    sudo systemctl stop mongod
-   ```
-
-   Wait 5 minutes, and you should receive an alert email. Don't forget to start MongoDB again:
-
-   ```bash
+   
+   # Wait a minute, then start MongoDB to trigger an UP alert
    sudo systemctl start mongod
    ```
 

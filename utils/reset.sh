@@ -2,7 +2,7 @@
 
 set -e
 
-echo "⚠ WARNING: This will permanently delete MongoDB, nginx, certbot, AWS CLI, fcgiwrap, and configs."
+echo "⚠ WARNING: This will permanently delete MongoDB, nginx, certbot, AWS CLI, fcgiwrap, monitoring services, and configs."
 
 read -p "Type 'RESET' to continue: " CONFIRM
 if [ "$CONFIRM" != "RESET" ]; then
@@ -14,11 +14,13 @@ echo "Stopping services..."
 sudo systemctl stop mongod || true
 sudo systemctl stop nginx || true
 sudo systemctl stop fcgiwrap || true
+sudo systemctl stop mongodb-health-check || true
 
 echo "Disabling services..."
 sudo systemctl disable mongod || true
 sudo systemctl disable nginx || true
 sudo systemctl disable fcgiwrap || true
+sudo systemctl disable mongodb-health-check || true
 
 echo "Removing MongoDB..."
 sudo apt purge -y mongodb-org
@@ -42,6 +44,10 @@ echo "Removing custom scripts..."
 sudo rm -f /usr/local/bin/mongo_backup.sh
 sudo rm -f /usr/local/bin/mongo_health_check.sh
 sudo rm -f /usr/local/bin/mongo_monitor.sh
+
+echo "Removing systemd service files..."
+sudo rm -f /etc/systemd/system/mongodb-health-check.service
+sudo systemctl daemon-reload
 
 echo "Removing msmtp config..."
 sudo rm -f /etc/msmtprc

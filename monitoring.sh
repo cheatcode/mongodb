@@ -61,17 +61,71 @@ EOF
 
 sudo chmod 600 /etc/msmtprc
 
-# NOTE: Setup health checks
+# NOTE: Setup health checks with state tracking
 echo "Setting up MongoDB health check script..."
 cat <<EOF | sudo tee /usr/local/bin/mongo_health_check.sh
 #!/bin/bash
-if ! pgrep mongod > /dev/null; then
-  echo "MongoDB is DOWN on \$(hostname -f)" | mail -s "MongoDB DOWN ALERT" $ALERT_EMAIL
+
+# State file to track MongoDB status
+STATE_FILE="/tmp/mongodb_status"
+
+# Check if MongoDB is running
+if pgrep mongod > /dev/null; then
+  CURRENT_STATE="up"
+else
+  CURRENT_STATE="down"
+fi
+
+# Check if state file exists, create it if not
+if [ ! -f "\$STATE_FILE" ]; then
+  echo "\$CURRENT_STATE" > "\$STATE_FILE"
+  PREVIOUS_STATE="\$CURRENT_STATE"
+else
+  PREVIOUS_STATE=\$(cat "\$STATE_FILE")
+fi
+
+# Send alerts if state has changed
+if [ "\$CURRENT_STATE" != "\$PREVIOUS_STATE" ]; then
+  if [ "\$CURRENT_STATE" == "down" ]; then
+    echo "MongoDB is DOWN on \$(hostname -f)" | mail -s "⚠️ ALERT: MongoDB DOWN" $ALERT_EMAIL
+  else
+    echo "MongoDB is back UP on \$(hostname -f)" | mail -s "✅ ALERT: MongoDB UP" $ALERT_EMAIL
+  fi
+  
+  # Update state file
+  echo "\$CURRENT_STATE" > "\$STATE_FILE"
 fi
 EOF
 
 sudo chmod +x /usr/local/bin/mongo_health_check.sh
-echo "*/5 * * * * root /usr/local/bin/mongo_health_check.sh" | sudo tee /etc/cron.d/mongo-health-check
+
+# Create a systemd service for the health check
+echo "Creating systemd service for MongoDB health checks..."
+cat <<EOF | sudo tee /etc/systemd/system/mongodb-health-check.service
+[Unit]
+Description=MongoDB Health Check Service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/bin/bash -c "while true; do /usr/local/bin/mongo_health_check.sh; sleep 30; done"
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable and start the service
+sudo systemctl daemon-reload
+sudo systemctl enable mongodb-health-check.service
+sudo systemctl start mongodb-health-check.service
+
+# Remove old cron job if it exists
+if [ -f /etc/cron.d/mongo-health-check ]; then
+  sudo rm /etc/cron.d/mongo-health-check
+fi
 
 # NOTE: Define script for /monitor endpoint
 echo "Creating monitoring endpoint script..."
@@ -125,5 +179,6 @@ sudo systemctl enable fcgiwrap
 sudo systemctl start fcgiwrap
 
 echo "✅ MongoDB monitoring and alerts setup complete for $DOMAIN"
-echo "Health checks will run every 5 minutes and send alerts to $ALERT_EMAIL"
+echo "Health checks will run every 30 seconds and send alerts to $ALERT_EMAIL"
+echo "Alerts will be sent when MongoDB goes down AND when it comes back up"
 echo "Monitoring endpoint available at: http://$DOMAIN/monitor?token=$MONITOR_TOKEN"
