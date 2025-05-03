@@ -12,13 +12,11 @@ if [ ! -f "$CONFIG_FILE" ]; then
   exit 1
 fi
 
-MONGO_VERSION=8.0
-MONGO_CONF="/etc/mongod.conf"
-MONGO_KEYFILE="/etc/mongo-keyfile"
-LOG_FILE="/var/log/mongodb/mongod.log"
-NGINX_CONF="/etc/nginx/sites-available/mongo_ssl"
-BACKUP_SCRIPT="/usr/local/bin/mongo_backup.sh"
+# Install base tools including jq FIRST
+sudo apt update
+sudo apt install -y curl gnupg2 ca-certificates lsb-release software-properties-common jq ufw awscli msmtp msmtp-mta bsd-mailx fcgiwrap
 
+# Read config
 DB_USERNAME=$(jq -r '.db_username' "$CONFIG_FILE")
 DB_PASSWORD=$(jq -r '.db_password' "$CONFIG_FILE")
 AWS_BUCKET=$(jq -r '.aws_bucket' "$CONFIG_FILE")
@@ -32,13 +30,29 @@ SMTP_USER=$(jq -r '.smtp_user' "$CONFIG_FILE")
 SMTP_PASS=$(jq -r '.smtp_pass' "$CONFIG_FILE")
 MONITOR_TOKEN=$(jq -r '.monitor_token' "$CONFIG_FILE")
 
-# Install required packages
-wget -qO - https://www.mongodb.org/static/pgp/server-$MONGO_VERSION.asc | sudo apt-key add -
-echo "deb [ arch=amd64 ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/$MONGO_VERSION multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-$MONGO_VERSION.list
-sudo apt update
-sudo apt install -y mongodb-org nginx certbot python3-certbot-nginx logrotate awscli jq ufw micro msmtp msmtp-mta bsd-mailx fcgiwrap
+MONGO_VERSION=8.0
+MONGO_CONF="/etc/mongod.conf"
+MONGO_KEYFILE="/etc/mongo-keyfile"
+LOG_FILE="/var/log/mongodb/mongod.log"
+BACKUP_SCRIPT="/usr/local/bin/mongo_backup.sh"
 
-# Configure msmtp (SMTP email)
+# Install MongoDB 8.0
+curl -fsSL https://pgp.mongodb.com/server-8.0.asc | sudo gpg --dearmor -o /usr/share/keyrings/mongodb-server-8.0.gpg
+echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu $(lsb_release -cs)/mongodb-org/8.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-8.0.list
+sudo apt update
+sudo apt install -y mongodb-org
+
+# Install official nginx.org build with --with-stream
+curl https://nginx.org/keys/nginx_signing.key | sudo gpg --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/ubuntu $(lsb_release -cs) nginx" | sudo tee /etc/apt/sources.list.d/nginx.list
+sudo apt update
+sudo apt remove -y nginx nginx-common nginx-core || true
+sudo apt install -y nginx
+
+# Install Certbot
+sudo apt install -y certbot python3-certbot-nginx
+
+# Configure msmtp (SMTP email alerts)
 cat <<EOF | sudo tee /etc/msmtprc
 defaults
 auth on
@@ -84,36 +98,24 @@ processManagement:
 EOF
 
 sudo systemctl enable mongod
-sudo systemctl restart mongod
+sudo systemctl start mongod
 
 # Wait for MongoDB to start
 sleep 10
 
 # Create admin user
-mongo --eval "db.getSiblingDB('admin').createUser({ user: '$DB_USERNAME', pwd: '$DB_PASSWORD', roles: [ { role: 'root', db: 'admin' } ] })" || echo "Admin user may already exist, skipping creation."
+mongo --eval "db.getSiblingDB('admin').createUser({ user: '$DB_USERNAME', pwd: '$DB_PASSWORD', roles: [ { role: 'root', db: 'admin' } ] })" || echo "Admin user may already exist."
 
-# Get SSL cert
+# Get Let's Encrypt cert
 sudo certbot certonly --nginx --non-interactive --agree-tos --email admin@$DOMAIN -d $DOMAIN
 
-# Configure Nginx SSL proxy
-cat <<EOF | sudo tee $NGINX_CONF
-stream {
-  upstream mongo_backend {
-    server 127.0.0.1:27017;
-  }
-  server {
-    listen 443 ssl;
-    ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
-    proxy_pass mongo_backend;
-  }
-}
-EOF
+# Add stream config to nginx.conf
+sudo sed -i '/^http {/i stream {\n  upstream mongo_backend {\n    server 127.0.0.1:27017;\n  }\n  server {\n    listen 443 ssl;\n    ssl_certificate /etc/letsencrypt/live/'$DOMAIN'/fullchain.pem;\n    ssl_certificate_key /etc/letsencrypt/live/'$DOMAIN'/privkey.pem;\n    proxy_pass mongo_backend;\n  }\n}\n' /etc/nginx/nginx.conf
 
-sudo ln -sf $NGINX_CONF /etc/nginx/sites-enabled/mongo_ssl
+sudo nginx -t
 sudo systemctl reload nginx
 
-# Set up SSL renew cron
+# Setup SSL renew cron
 echo "0 3 * * * root certbot renew --nginx --quiet" | sudo tee /etc/cron.d/certbot-renew
 
 # Setup logrotate
@@ -137,7 +139,7 @@ aws configure set aws_access_key_id $AWS_ACCESS_KEY
 aws configure set aws_secret_access_key $AWS_SECRET_KEY
 aws configure set region $AWS_REGION
 
-# Backups only on primary
+# Backup script (primary only)
 if [ "$ROLE" == "primary" ]; then
   HOSTNAME=$(hostname -f)
   cat <<EOF | sudo tee $BACKUP_SCRIPT
@@ -161,7 +163,7 @@ EOF
   echo "0 2 * * * root $BACKUP_SCRIPT" | sudo tee /etc/cron.d/mongo-backup
 fi
 
-# Setup health check cron
+# Health check cron
 cat <<EOF | sudo tee /usr/local/bin/mongo_health_check.sh
 #!/bin/bash
 if ! pgrep mongod > /dev/null; then
@@ -171,7 +173,7 @@ EOF
 chmod +x /usr/local/bin/mongo_health_check.sh
 echo "*/5 * * * * root /usr/local/bin/mongo_health_check.sh" | sudo tee /etc/cron.d/mongo-health-check
 
-# Setup /monitor endpoint
+# /monitor endpoint
 cat <<EOF | sudo tee /usr/local/bin/mongo_monitor.sh
 #!/bin/bash
 read QUERY_STRING
@@ -191,8 +193,8 @@ echo "Disk: \$DISK"
 EOF
 chmod +x /usr/local/bin/mongo_monitor.sh
 
-# Nginx config for monitor
-cat <<EOF | sudo tee /etc/nginx/sites-available/mongo_monitor
+# Nginx config for /monitor
+cat <<EOF | sudo tee /etc/nginx/conf.d/monitor.conf
 server {
   listen 80;
   server_name $DOMAIN;
@@ -205,12 +207,12 @@ server {
 }
 EOF
 
-sudo ln -sf /etc/nginx/sites-available/mongo_monitor /etc/nginx/sites-enabled/mongo_monitor
+sudo nginx -t
 sudo systemctl reload nginx
 sudo systemctl enable fcgiwrap
 sudo systemctl start fcgiwrap
 
-# Setup UFW
+# UFW rules
 sudo ufw allow ssh
 sudo ufw allow 443/tcp
 sudo ufw allow 80/tcp
@@ -218,4 +220,3 @@ sudo ufw deny 27017
 sudo ufw --force enable
 
 echo "✅ MongoDB $ROLE node setup complete on $DOMAIN"
-echo "✅ micro editor installed — run 'micro <file>' to edit configs easily"

@@ -12,6 +12,14 @@ mongodb/
 ├── restore_backup.sh
 └── README.md
 
+## Install Micro IDE
+
+```
+sudo apt install -y micro
+```
+
+This gives a mouse-friendly IDE on the instance for editing files quickly.
+
 ## DNS
 
 1. Once the server is provisioned, point the domain at the instance so we can provision SSL during setup.
@@ -19,31 +27,30 @@ mongodb/
 ## Setup
 
 1. Update `config.json` with your credentials.
-2. Make scripts executable:
-   chmod +x *.sh
+2. Make scripts executable: chmod +x *.sh
 
 ## Provision Nodes
 
 Run these on each DigitalOcean droplet:
 
 # On primary node
-./provision.sh primary rs0 mdb1.codewithparrot.com
+./provision.sh primary rs0 <domain>
 
 # On secondary node
-./provision.sh secondary rs0 mdb2.codewithparrot.com
+./provision.sh secondary rs0 <domain>
 
 # On arbiter node
-./provision.sh arbiter rs0 mdb3.codewithparrot.com
+./provision.sh arbiter rs0 <domain>
 
 ## Manage Replica Set
 
 Add or remove members from the replica set:
 
 # Add secondary or arbiter
-./replica_sets.sh add mdb2.codewithparrot.com:27017
+./replica_sets.sh add <domain>:27017
 
 # Remove secondary or arbiter
-./replica_sets.sh remove mdb2.codewithparrot.com:27017
+./replica_sets.sh remove <domain>:27017
 
 ## Backups
 
@@ -60,7 +67,7 @@ Example:
 
 ## Notes
 
-- Make sure DNS records (mdb1.codewithparrot.com, mdb2.codewithparrot.com, etc.) point to the correct droplets.
+- Make sure DNS records (<domain>, <domain>, etc.) point to the correct droplets.
 - Backups are stored in S3 under s3://<bucket>/<hostname>/.
 - Only the primary node runs automated backups and cleanup.
 - Configure the AWS region in config.json to match your bucket.
