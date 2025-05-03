@@ -29,6 +29,14 @@ SMTP_USER=$(jq -r '.smtp_user' "$CONFIG_FILE")
 SMTP_PASS=$(jq -r '.smtp_pass' "$CONFIG_FILE")
 MONITOR_TOKEN=$(jq -r '.monitor_token' "$CONFIG_FILE")
 REPLICA_SET_KEY=$(jq -r '.replica_set_key' "$CONFIG_FILE")
+MONGO_PORT=$(jq -r '.mongo_port' "$CONFIG_FILE")
+
+# Check if mongo_port is set
+if [ -z "$MONGO_PORT" ] || [ "$MONGO_PORT" == "null" ]; then
+  echo "❌ Missing required configuration value: mongo_port"
+  echo "Please add mongo_port to your config.json file."
+  exit 1
+fi
 MONGO_VERSION=8.0
 MONGO_CONF="/etc/mongod.conf"
 MONGO_KEYFILE="/etc/mongo-keyfile"
@@ -57,7 +65,7 @@ systemLog:
   path: $LOG_FILE
   logAppend: true
 net:
-  port: 2610
+  port: $MONGO_PORT
   bindIp: 127.0.0.1
 security:
   authorization: enabled
@@ -75,11 +83,11 @@ sleep 10
 # NOTE: Init the replica set.
 
 if [ "$ROLE" == "primary" ]; then
-  mongosh --eval "rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'localhost:27017' }]})"
+  mongosh --port $MONGO_PORT --eval "rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'localhost:$MONGO_PORT' }]})"
 fi
 
 # NOTE: Create admin user.
-mongosh --eval "db.getSiblingDB('admin').createUser({ user: '$DB_USERNAME', pwd: '$DB_PASSWORD', roles: [ { role: 'root', db: 'admin' } ] })" || echo "Admin user may already exist."
+mongosh --port $MONGO_PORT --eval "db.getSiblingDB('admin').createUser({ user: '$DB_USERNAME', pwd: '$DB_PASSWORD', roles: [ { role: 'root', db: 'admin' } ] })" || echo "Admin user may already exist."
 
 # NOTE: Setup log rotation.
 cat <<EOF | sudo tee /etc/logrotate.d/mongod
@@ -119,10 +127,10 @@ BACKUP_PATH="/tmp/mongo-backup-\$TIMESTAMP.gz"
 SSL_PEM_PATH="/etc/ssl/mongodb.pem"
 if grep -q "ssl:" /etc/mongod.conf && grep -q "mode: requireSSL" /etc/mongod.conf; then
   echo "MongoDB SSL is enabled. Using SSL connection for backup..."
-  mongodump --port 2610 --ssl --sslCAFile \$SSL_PEM_PATH --username $DB_USERNAME --password $DB_PASSWORD --authenticationDatabase admin --archive=\$BACKUP_PATH --gzip
+  mongodump --port $MONGO_PORT --ssl --sslCAFile \$SSL_PEM_PATH --username $DB_USERNAME --password $DB_PASSWORD --authenticationDatabase admin --archive=\$BACKUP_PATH --gzip
 else
   echo "MongoDB SSL is not enabled. Using standard connection for backup..."
-  mongodump --port 2610 --username $DB_USERNAME --password $DB_PASSWORD --authenticationDatabase admin --archive=\$BACKUP_PATH --gzip
+  mongodump --port $MONGO_PORT --username $DB_USERNAME --password $DB_PASSWORD --authenticationDatabase admin --archive=\$BACKUP_PATH --gzip
 fi
 
 aws s3 cp \$BACKUP_PATH s3://$AWS_BUCKET/\$HOSTNAME/\$TIMESTAMP.gz --region $AWS_REGION
@@ -147,7 +155,7 @@ sudo ufw allow ssh                  # keep SSH open
 sudo ufw allow 443/tcp              # keep HTTPS open
 sudo ufw allow 80/tcp               # keep HTTP open
 
-sudo ufw allow 2610/tcp             # allow MongoDB on custom port
+sudo ufw allow ${MONGO_PORT}/tcp    # allow MongoDB on custom port
 
 sudo ufw deny 27017                 # deny default MongoDB port just in case
 

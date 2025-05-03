@@ -1,49 +1,333 @@
-# MongoDB Replica Set Setup
+# MongoDB Deployment with SSL and Monitoring
 
-This repo can be used to provision MongoDB instances intended to be part of a replica set (either single-member or multi-member).
+This repository contains a comprehensive set of scripts for deploying, securing, and monitoring MongoDB instances. The scripts are designed to be modular, allowing you to set up MongoDB with proper security, SSL encryption, and monitoring capabilities.
 
+## Table of Contents
 
-# Prerequisites
+1. [Overview](#overview)
+2. [Prerequisites](#prerequisites)
+3. [Initial Setup](#initial-setup)
+4. [Step 1: Bootstrap MongoDB](#step-1-bootstrap-mongodb)
+5. [Step 2: Provision SSL Certificates](#step-2-provision-ssl-certificates)
+6. [Step 3: Set Up Monitoring](#step-3-set-up-monitoring)
+7. [Managing Replica Sets](#managing-replica-sets)
+8. [Backup and Restore](#backup-and-restore)
+9. [Troubleshooting](#troubleshooting)
+10. [Reset and Cleanup](#reset-and-cleanup)
 
-## Generate a key for keyFile
+## Overview
 
-This key must be stored in a common keyFile location on ALL replica set members. To generate a valid key (this must be in base64), run:
+This deployment solution consists of several scripts that handle different aspects of MongoDB deployment:
 
+- **bootstrap.sh**: Sets up MongoDB with proper configuration, security, and backup capabilities
+- **provision_ssl.sh**: Provisions SSL certificates and configures MongoDB to use SSL
+- **monitoring.sh**: Sets up email alerts and a monitoring endpoint
+- **Utility scripts**: Additional scripts for managing replica sets, backups, and more
+
+## Prerequisites
+
+Before you begin, ensure you have:
+
+1. **A Ubuntu server** (preferably Ubuntu 20.04 LTS or newer)
+2. **Root or sudo access** to the server
+3. **A domain name** pointing to your server's IP address (for SSL certificates)
+4. **Open ports**:
+   - 22 (SSH)
+   - 80 (HTTP - needed for Let's Encrypt verification)
+   - 443 (HTTPS)
+   - The port you specify for MongoDB in config.json (e.g., 27017, 2610, etc.)
+5. **AWS account** (if you plan to use S3 for backups)
+
+## Initial Setup
+
+1. **Clone this repository** to your server:
+
+   ```bash
+   git clone https://github.com/cheatcode/mongodb.git
+   cd mongodb
+   ```
+
+2. **Install the Micro text editor** (optional but recommended):
+
+   The Micro text editor provides a user-friendly interface for editing files via the command line, making it easier to edit configuration files.
+
+   ```bash
+   sudo apt update
+   sudo apt install -y micro
+   ```
+
+   After installation, you can edit files using:
+   ```bash
+   micro filename
+   ```
+
+3. **Make the setup script executable**:
+
+   ```bash
+   chmod +x setup.sh
+   ```
+
+4. **Run the setup script** to make all scripts executable:
+
+   ```bash
+   ./setup.sh
+   ```
+
+5. **Create and configure the config.json file**:
+
+   Create a file named `config.json` in the repository root with the following content:
+
+   ```json
+   {
+     "db_username": "admin",
+     "db_password": "your_secure_password",
+     "aws_bucket": "your-s3-bucket-name",
+     "aws_region": "us-east-1",
+     "aws_access_key": "YOUR_AWS_ACCESS_KEY",
+     "aws_secret_key": "YOUR_AWS_SECRET_KEY",
+     "alert_email": "alerts@yourdomain.com",
+     "smtp_server": "smtp.example.com",
+     "smtp_port": "587",
+     "smtp_user": "your-smtp-username",
+     "smtp_pass": "your-smtp-password",
+     "monitor_token": "your_secure_monitor_token",
+     "replica_set_key": "your_replica_set_key",
+     "mongo_port": "27017"
+   }
+   ```
+
+   Replace the placeholder values with your actual configuration:
+   
+   - `db_username` and `db_password`: Credentials for the MongoDB admin user
+   - `aws_*` parameters: Your AWS credentials and S3 bucket information for backups
+   - `alert_email`: Email address to receive monitoring alerts
+   - `smtp_*` parameters: SMTP server details for sending alert emails
+   - `monitor_token`: A secure token for accessing the monitoring endpoint
+   - `replica_set_key`: A secure key for MongoDB replica set authentication
+   - `mongo_port`: The port MongoDB will listen on (e.g., 27017, 2610, etc.)
+
+   To generate a secure `replica_set_key`, you can use:
+   ```bash
+   openssl rand -base64 32
+   ```
+
+   For `monitor_token`, you can use:
+   ```bash
+   openssl rand -hex 16
+   ```
+
+## Step 1: Bootstrap MongoDB
+
+The bootstrap script installs MongoDB, configures it with proper security settings, and sets up backup capabilities.
+
+1. **Run the bootstrap script**:
+
+   ```bash
+   ./bootstrap.sh primary rs0 your-domain.com
+   ```
+
+   Parameters:
+   - `primary`: The role of this node (can be `primary`, `secondary`, or `arbiter`)
+   - `rs0`: The name of the replica set
+   - `your-domain.com`: Your server's domain name
+
+2. **What the bootstrap script does**:
+   - Installs MongoDB 8.0
+   - Creates a keyfile for replica set authentication
+   - Configures MongoDB to use the port specified in config.json
+   - Sets up user authentication
+   - Configures log rotation
+   - Sets up AWS CLI and S3 backup script (if you're the primary)
+   - Configures firewall rules with UFW
+
+3. **Verify MongoDB is running**:
+
+   ```bash
+   sudo systemctl status mongod
+   ```
+
+   You should see that MongoDB is active and running.
+
+## Step 2: Provision SSL Certificates
+
+The provision_ssl script obtains SSL certificates from Let's Encrypt and configures MongoDB to use them.
+
+1. **Run the SSL provisioning script**:
+
+   ```bash
+   ./provision_ssl.sh your-domain.com
+   ```
+
+   Parameter:
+   - `your-domain.com`: Your server's domain name
+
+2. **What the provision_ssl script does**:
+   - Installs certbot if not already installed
+   - Obtains SSL certificates from Let's Encrypt
+   - Concatenates the certificate files into a single PEM file for MongoDB
+   - Updates the MongoDB configuration to use SSL
+   - Sets up automatic certificate renewal with a hook to update MongoDB
+   - Restarts MongoDB with the new SSL configuration
+
+3. **Verify SSL is working**:
+
+   The script will verify that MongoDB is running with SSL. You can also check manually:
+
+   ```bash
+   sudo mongosh --port $MONGO_PORT --ssl --sslCAFile /etc/ssl/mongodb.pem --eval "db.adminCommand({ getParameter: 1, sslMode: 1 })"
+   ```
+
+   Replace `$MONGO_PORT` with the port you specified in config.json.
+
+   You should see output indicating that `sslMode` is set to `requireSSL`.
+
+## Step 3: Set Up Monitoring
+
+The monitoring script sets up email alerts and a monitoring endpoint for your MongoDB instance.
+
+1. **Run the monitoring script**:
+
+   ```bash
+   ./monitoring.sh your-domain.com
+   ```
+
+   Parameter:
+   - `your-domain.com`: Your server's domain name
+
+2. **What the monitoring script does**:
+   - Installs required dependencies (msmtp, nginx, fcgiwrap)
+   - Configures email alerts via SMTP
+   - Sets up health checks that run every 5 minutes
+   - Creates a monitoring endpoint accessible via HTTP
+   - Configures nginx to serve the monitoring endpoint
+
+3. **Access the monitoring endpoint**:
+
+   You can access the monitoring endpoint at:
+   ```
+   http://your-domain.com/monitor?token=your_secure_monitor_token
+   ```
+
+   Replace `your_secure_monitor_token` with the value you set in `config.json`.
+
+4. **Test email alerts**:
+
+   You can test if email alerts are working by temporarily stopping MongoDB:
+
+   ```bash
+   sudo systemctl stop mongod
+   ```
+
+   Wait 5 minutes, and you should receive an alert email. Don't forget to start MongoDB again:
+
+   ```bash
+   sudo systemctl start mongod
+   ```
+
+## Managing Replica Sets
+
+If you're setting up a replica set with multiple nodes, you'll need to add secondary nodes to the replica set.
+
+1. **Set up secondary nodes**:
+
+   On each secondary node, follow the same steps as above:
+   
+   ```bash
+   # On secondary node
+   ./bootstrap.sh secondary rs0 secondary-node-domain.com
+   ./provision_ssl.sh secondary-node-domain.com
+   ./monitoring.sh secondary-node-domain.com
+   ```
+
+2. **Add secondary nodes to the replica set**:
+
+   From the primary node, use the replica_sets.sh utility script:
+
+   ```bash
+   ./utils/replica_sets.sh add secondary-node-domain.com:$MONGO_PORT
+   ```
+
+   Replace `$MONGO_PORT` with the port you specified in config.json.
+
+3. **Remove nodes from the replica set** (if needed):
+
+   ```bash
+   ./utils/replica_sets.sh remove secondary-node-domain.com:$MONGO_PORT
+   ```
+
+   Replace `$MONGO_PORT` with the port you specified in config.json.
+
+## Backup and Restore
+
+The bootstrap script sets up automatic backups to S3 for the primary node. You can also manage backups manually.
+
+1. **List available backups**:
+
+   ```bash
+   ./utils/list_backups.sh
+   ```
+
+2. **Restore from a backup**:
+
+   ```bash
+   ./utils/restore_backup.sh backup-filename.gz
+   ```
+
+   Replace `backup-filename.gz` with the actual backup file name from the list.
+
+## Troubleshooting
+
+If you encounter issues during the setup process, here are some common troubleshooting steps:
+
+1. **Check MongoDB logs**:
+
+   ```bash
+   sudo journalctl -u mongod --no-pager -n 100
+   ```
+
+2. **Verify MongoDB is running**:
+
+   ```bash
+   sudo systemctl status mongod
+   ```
+
+3. **Check SSL certificate status**:
+
+   ```bash
+   sudo certbot certificates
+   ```
+
+4. **Test MongoDB connection with SSL**:
+
+   ```bash
+   sudo mongosh --port $MONGO_PORT --ssl --sslCAFile /etc/ssl/mongodb.pem -u admin -p your_password --authenticationDatabase admin
+   ```
+
+   Replace `$MONGO_PORT` with the port you specified in config.json.
+
+5. **Check nginx configuration**:
+
+   ```bash
+   sudo nginx -t
+   sudo systemctl status nginx
+   ```
+
+6. **Verify monitoring endpoint**:
+
+   ```bash
+   curl -v "http://your-domain.com/monitor?token=your_secure_monitor_token"
+   ```
+
+## Reset and Cleanup
+
+If you need to reset your server and remove all installed components, you can use the reset script:
+
+```bash
+./utils/reset.sh
 ```
-openssl rand -base64 32
-```
 
-The output of this function should be placed in the file at the path specified for security.keyFile in your /etc/mongodb/mongod.conf.
+**WARNING**: This will permanently delete MongoDB, nginx, certbot, AWS CLI, fcgiwrap, and all configurations. Use with caution!
 
-**WARNING**: this file needs to be copied from the primary to all secondary members as it's used for authentication between members.
+---
 
-## Install micro on the instance
-
-Not required, but helpful. Install `micro` via `sudo apt install -y micro` to installed the Micro IDE which gives a mouse-friendly TUI for editing files on a Linux machine.
-
-## Copy files to instance via Git
-
-```
-git clone https://github.com/cheatcode/mongodb.git
-```
-
-Let this copy into the /root/mongodb directory.
-
-## Make sure all executables are executable
-
-```
-chmod +x <file>.sh
-```
-
-# Provisioning
-
-To start provisioning, run:
-
-# On primary node
-./provision.sh primary rs0 <domain>
-
-# On secondary node
-./provision.sh secondary rs0 <domain>
-
-# On arbiter node
-./provision.sh arbiter rs0 <domain>
+This deployment solution provides a secure, monitored MongoDB installation with SSL encryption and automatic backups. If you have any questions or issues, please open an issue on the GitHub repository.

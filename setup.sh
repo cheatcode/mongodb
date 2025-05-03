@@ -7,6 +7,13 @@ set -e
 
 echo "🔧 Setting up MongoDB deployment scripts..."
 
+# Check if micro is installed, install if not
+if ! command -v micro &> /dev/null; then
+  echo "Installing micro text editor for easier file editing..."
+  sudo apt update
+  sudo apt install -y micro
+fi
+
 # Make all shell scripts executable
 echo "Making all shell scripts executable..."
 chmod +x *.sh
