@@ -26,7 +26,15 @@ echo "Downloading $BACKUP_FILE from S3..."
 aws s3 cp s3://$AWS_BUCKET/$HOSTNAME/$BACKUP_FILE $TMP_PATH --region $AWS_REGION
 
 echo "Restoring backup..."
-mongorestore --username $DB_USERNAME --password $DB_PASSWORD --authenticationDatabase admin --archive=$TMP_PATH --gzip --drop
+# Check if MongoDB SSL is configured
+SSL_PEM_PATH="/etc/ssl/mongodb.pem"
+if grep -q "ssl:" /etc/mongod.conf && grep -q "mode: requireSSL" /etc/mongod.conf; then
+  echo "MongoDB SSL is enabled. Using SSL connection..."
+  mongorestore --port 2610 --ssl --sslCAFile $SSL_PEM_PATH --username $DB_USERNAME --password $DB_PASSWORD --authenticationDatabase admin --archive=$TMP_PATH --gzip --drop
+else
+  echo "MongoDB SSL is not enabled. Using standard connection..."
+  mongorestore --port 2610 --username $DB_USERNAME --password $DB_PASSWORD --authenticationDatabase admin --archive=$TMP_PATH --gzip --drop
+fi
 
 rm $TMP_PATH
 
