@@ -44,8 +44,18 @@ LOG_FILE="/var/log/mongodb/mongod.log"
 BACKUP_SCRIPT="/usr/local/bin/mongo_backup.sh"
 
 # NOTE: Install MongoDB 8.0.
-curl -fsSL https://pgp.mongodb.com/server-8.0.asc | sudo gpg --dearmor -o /usr/share/keyrings/mongodb-server-8.0.gpg
-echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu $(lsb_release -cs)/mongodb-org/8.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-8.0.list
+curl -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc | sudo gpg -o /usr/share/keyrings/mongodb-server-8.0.gpg --dearmor
+
+# Use the correct codename for Ubuntu 24.04 (noble)
+UBUNTU_CODENAME=$(lsb_release -cs)
+if [ "$UBUNTU_CODENAME" = "oracular" ] || [ "$UBUNTU_CODENAME" = "noble" ]; then
+  # Use noble for Ubuntu 24.04
+  echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/8.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-8.0.list
+else
+  # Use the detected Ubuntu version for other Ubuntu versions
+  echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu $UBUNTU_CODENAME/mongodb-org/8.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-8.0.list
+fi
+
 sudo apt update
 sudo apt install -y mongodb-org
 
