@@ -12,9 +12,14 @@ if [ ! -f "$CONFIG_FILE" ]; then
   exit 1
 fi
 
-# Install base tools including jq FIRST
+# Install base tools
 sudo apt update
-sudo apt install -y curl gnupg2 ca-certificates lsb-release software-properties-common jq ufw awscli msmtp msmtp-mta bsd-mailx fcgiwrap
+sudo apt install -y curl gnupg2 ca-certificates lsb-release software-properties-common jq ufw msmtp msmtp-mta bsd-mailx fcgiwrap unzip
+
+# Install AWS CLI
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscli.zip"
+unzip /tmp/awscli.zip -d /tmp
+sudo /tmp/aws/install
 
 # Read config
 DB_USERNAME=$(jq -r '.db_username' "$CONFIG_FILE")
@@ -109,11 +114,16 @@ mongo --eval "db.getSiblingDB('admin').createUser({ user: '$DB_USERNAME', pwd: '
 # Get Let's Encrypt cert
 sudo certbot certonly --nginx --non-interactive --agree-tos --email admin@$DOMAIN -d $DOMAIN
 
+sudo systemctl stop nginx
+
 # Add stream config to nginx.conf
 sudo sed -i '/^http {/i stream {\n  upstream mongo_backend {\n    server 127.0.0.1:27017;\n  }\n  server {\n    listen 443 ssl;\n    ssl_certificate /etc/letsencrypt/live/'$DOMAIN'/fullchain.pem;\n    ssl_certificate_key /etc/letsencrypt/live/'$DOMAIN'/privkey.pem;\n    proxy_pass mongo_backend;\n  }\n}\n' /etc/nginx/nginx.conf
 
-sudo nginx -t
-sudo systemctl reload nginx
+if sudo nginx -t; then
+  sudo systemctl start nginx
+else
+  echo "❌ nginx config test failed; skipping nginx start."
+fi
 
 # Setup SSL renew cron
 echo "0 3 * * * root certbot renew --nginx --quiet" | sudo tee /etc/cron.d/certbot-renew
@@ -193,6 +203,8 @@ echo "Disk: \$DISK"
 EOF
 chmod +x /usr/local/bin/mongo_monitor.sh
 
+sudo systemctl stop nginx
+
 # Nginx config for /monitor
 cat <<EOF | sudo tee /etc/nginx/conf.d/monitor.conf
 server {
@@ -207,8 +219,12 @@ server {
 }
 EOF
 
-sudo nginx -t
-sudo systemctl reload nginx
+if sudo nginx -t; then
+  sudo systemctl start nginx
+else
+  echo "❌ nginx config test failed; skipping nginx start."
+fi
+
 sudo systemctl enable fcgiwrap
 sudo systemctl start fcgiwrap
 
