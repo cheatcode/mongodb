@@ -1,117 +1,31 @@
-# MongoDB Replica Set Toolkit
+# MongoDB Replica Set Setup
 
-Production-ready toolkit to provision, manage, backup, and restore MongoDB replica sets.
+This repo can be used to provision MongoDB instances intended to be part of a replica set (either single-member or multi-member).
 
-## Folder Structure
 
-mongodb/
-├── config.json
-├── provision.sh
-├── replica_sets.sh
-├── list_backups.sh
-├── restore_backup.sh
-└── README.md
+# Prerequisites
 
-## Install Micro IDE
+## Generate a key for keyFile
+
+This key must be stored in a common keyFile location on ALL replica set members. To generate a valid key (this must be in base64), run:
 
 ```
-sudo apt install -y micro
+openssl rand -base64 32
 ```
 
-This gives a mouse-friendly IDE on the instance for editing files quickly.
+The output of this function should be placed in the file at the path specified for security.keyFile in your /etc/mongodb/mongod.conf.
 
-## DNS
+**WARNING**: this file needs to be copied from the primary to all secondary members as it's used for authentication between members.
 
-1. Once the server is provisioned, point the domain at the instance so we can provision SSL during setup.
+## Install micro on the instance
 
-## Setup
+Not required, but helpful. Install `micro` via `sudo apt install -y micro` to installed the Micro IDE which gives a mouse-friendly TUI for editing files on a Linux machine.
 
-1. Update `config.json` with your credentials.
-2. Make scripts executable: chmod +x *.sh
+## Copy files to instance via Git
 
-## Provision Nodes
+```
+git clone https://github.com/cheatcode/mongodb.git
+```
 
-Run these on each DigitalOcean droplet:
+Let this copy into the /root/mongodb directory.
 
-# On primary node
-./provision.sh primary rs0 <domain>
-
-# On secondary node
-./provision.sh secondary rs0 <domain>
-
-# On arbiter node
-./provision.sh arbiter rs0 <domain>
-
-## Manage Replica Set
-
-Add or remove members from the replica set:
-
-# Add secondary or arbiter
-./replica_sets.sh add <domain>:27017
-
-# Remove secondary or arbiter
-./replica_sets.sh remove <domain>:27017
-
-## Backups
-
-Backups only run from the primary node.
-
-- List backups:
-  ./list_backups.sh
-
-- Restore backup:
-  ./restore_backup.sh <backup_filename>
-
-Example:
-./restore_backup.sh 2025-05-02-02-00.gz
-
-## Notes
-
-- Make sure DNS records (<domain>, <domain>, etc.) point to the correct droplets.
-- Backups are stored in S3 under s3://<bucket>/<hostname>/.
-- Only the primary node runs automated backups and cleanup.
-- Configure the AWS region in config.json to match your bucket.
-
-## Example config.json
-
-{
-  "db_username": "admin",
-  "db_password": "your_secure_password",
-  "aws_bucket": "your-s3-bucket-name",
-  "aws_region": "us-east-1",
-  "aws_access_key": "YOUR_AWS_ACCESS_KEY",
-  "aws_secret_key": "YOUR_AWS_SECRET_KEY",
-  "alert_email": "alerts@yourdomain.com",
-  "smtp_server": "smtp.postmarkapp.com",
-  "smtp_port": "587",
-  "smtp_user": "your-postmark-username",
-  "smtp_pass": "your-postmark-password",
-  "monitor_token": "your_secure_token"
-}
-
-## Using micro to edit files
-
-This script installs [micro](https://micro-editor.github.io), a modern terminal-based editor with mouse support.
-
-Basic commands:
-
-- Edit a file:
-  micro <filename>
-
-- Example:
-  micro /etc/mongod.conf
-
-Mouse actions:
-
-- Click to move the cursor
-- Click and drag to select text
-- Scroll to move up/down
-- Right-click for menu (if enabled)
-
-Other shortcuts:
-
-- Ctrl+S → save
-- Ctrl+Q → quit
-- Ctrl+E → command menu
-
-micro works great if you want an easier, mouse-driven alternative to nano, vim, or vi.

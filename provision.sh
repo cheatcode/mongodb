@@ -12,16 +12,10 @@ if [ ! -f "$CONFIG_FILE" ]; then
   exit 1
 fi
 
-# Install base tools
+# NOTE: Install base dependencies required for install/config.
 sudo apt update
 sudo apt install -y curl gnupg2 ca-certificates lsb-release software-properties-common jq ufw msmtp msmtp-mta bsd-mailx fcgiwrap unzip
 
-# Install AWS CLI
-curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscli.zip"
-unzip /tmp/awscli.zip -d /tmp
-sudo /tmp/aws/install
-
-# Read config
 DB_USERNAME=$(jq -r '.db_username' "$CONFIG_FILE")
 DB_PASSWORD=$(jq -r '.db_password' "$CONFIG_FILE")
 AWS_BUCKET=$(jq -r '.aws_bucket' "$CONFIG_FILE")
@@ -34,6 +28,7 @@ SMTP_PORT=$(jq -r '.smtp_port' "$CONFIG_FILE")
 SMTP_USER=$(jq -r '.smtp_user' "$CONFIG_FILE")
 SMTP_PASS=$(jq -r '.smtp_pass' "$CONFIG_FILE")
 MONITOR_TOKEN=$(jq -r '.monitor_token' "$CONFIG_FILE")
+REPLICA_SET_KEY=$(jq -r '.replica_set_key' "$CONFIG_FILE")
 
 MONGO_VERSION=8.0
 MONGO_CONF="/etc/mongod.conf"
@@ -41,51 +36,37 @@ MONGO_KEYFILE="/etc/mongo-keyfile"
 LOG_FILE="/var/log/mongodb/mongod.log"
 BACKUP_SCRIPT="/usr/local/bin/mongo_backup.sh"
 
-# Install MongoDB 8.0
+# NOTE: Install AWS CLI for backup management.
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscli.zip"
+unzip /tmp/awscli.zip -d /tmp
+sudo /tmp/aws/install
+
+# NOTE: Install MongoDB 8.0.
 curl -fsSL https://pgp.mongodb.com/server-8.0.asc | sudo gpg --dearmor -o /usr/share/keyrings/mongodb-server-8.0.gpg
 echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu $(lsb_release -cs)/mongodb-org/8.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-8.0.list
 sudo apt update
 sudo apt install -y mongodb-org
 
-# Install official nginx.org build with --with-stream
+# NOTE: Create Mongo keyfile if missing.
+if [ ! -f "$MONGO_KEYFILE" ]; then
+  echo "$REPLICA_SET_KEY" > "$MONGO_KEYFILE"
+  chmod 400 "$MONGO_KEYFILE"
+  chown mongodb:mongodb "$MONGO_KEYFILE"
+fi
+
+# NOTE: Install official nginx.org build with --with-stream (required for proxying to MongoDB).
 curl https://nginx.org/keys/nginx_signing.key | sudo gpg --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg
 echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/ubuntu $(lsb_release -cs) nginx" | sudo tee /etc/apt/sources.list.d/nginx.list
 sudo apt update
 sudo apt remove -y nginx nginx-common nginx-core || true
 sudo apt install -y nginx
 
-# Install Certbot
 sudo apt install -y certbot python3-certbot-nginx
 
-# Configure msmtp (SMTP email alerts)
-cat <<EOF | sudo tee /etc/msmtprc
-defaults
-auth on
-tls on
-tls_trust_file /etc/ssl/certs/ca-certificates.crt
-account default
-host $SMTP_SERVER
-port $SMTP_PORT
-user $SMTP_USER
-password $SMTP_PASS
-from $ALERT_EMAIL
-logfile ~/.msmtp.log
-EOF
-chmod 600 /etc/msmtprc
-
-# Create Mongo keyfile if missing
-if [ ! -f "$MONGO_KEYFILE" ]; then
-  openssl rand -base64 756 > "$MONGO_KEYFILE"
-  chmod 400 "$MONGO_KEYFILE"
-  chown mongodb:mongodb "$MONGO_KEYFILE"
-fi
-
-# Configure mongod.conf
+# NOTE: Update mongod.conf.
 cat <<EOF | sudo tee $MONGO_CONF
 storage:
   dbPath: /var/lib/mongodb
-  journal:
-    enabled: true
 systemLog:
   destination: file
   path: $LOG_FILE
@@ -98,25 +79,27 @@ security:
   keyFile: $MONGO_KEYFILE
 replication:
   replSetName: $REPLICA_SET
-processManagement:
-  fork: false
 EOF
 
 sudo systemctl enable mongod
 sudo systemctl start mongod
 
-# Wait for MongoDB to start
+# NOTE: Wait for MongoDB to start.
 sleep 10
 
-# Create admin user
+# NOTE: Create admin user.
 mongo --eval "db.getSiblingDB('admin').createUser({ user: '$DB_USERNAME', pwd: '$DB_PASSWORD', roles: [ { role: 'root', db: 'admin' } ] })" || echo "Admin user may already exist."
 
-# Get Let's Encrypt cert
+# NOTE: Get Let's Encrypt cert.
 sudo certbot certonly --nginx --non-interactive --agree-tos --email admin@$DOMAIN -d $DOMAIN
 
+# NOTE: Setup SSL renew cron
+echo "0 3 * * * root certbot renew --nginx --quiet" | sudo tee /etc/cron.d/certbot-renew
+
+# NOTE: Stop Nginx to avoid weird restart errors.
 sudo systemctl stop nginx
 
-# Add stream config to nginx.conf
+# NOTE: Modify Nginx config to include stream directive for routing to Mongo.
 sudo sed -i '/^http {/i stream {\n  upstream mongo_backend {\n    server 127.0.0.1:27017;\n  }\n  server {\n    listen 443 ssl;\n    ssl_certificate /etc/letsencrypt/live/'$DOMAIN'/fullchain.pem;\n    ssl_certificate_key /etc/letsencrypt/live/'$DOMAIN'/privkey.pem;\n    proxy_pass mongo_backend;\n  }\n}\n' /etc/nginx/nginx.conf
 
 if sudo nginx -t; then
@@ -125,10 +108,7 @@ else
   echo "❌ nginx config test failed; skipping nginx start."
 fi
 
-# Setup SSL renew cron
-echo "0 3 * * * root certbot renew --nginx --quiet" | sudo tee /etc/cron.d/certbot-renew
-
-# Setup logrotate
+# NOTE: Setup log rotation.
 cat <<EOF | sudo tee /etc/logrotate.d/mongod
 $LOG_FILE {
   daily
@@ -144,12 +124,29 @@ $LOG_FILE {
 }
 EOF
 
-# Configure AWS CLI
+# NOTE: Configure msmtp (SMTP email alerts).
+cat <<EOF | sudo tee /etc/msmtprc
+defaults
+auth on
+tls on
+tls_trust_file /etc/ssl/certs/ca-certificates.crt
+account default
+host $SMTP_SERVER
+port $SMTP_PORT
+user $SMTP_USER
+password $SMTP_PASS
+from $ALERT_EMAIL
+logfile ~/.msmtp.log
+EOF
+
+chmod 600 /etc/msmtprc
+
+# NOTE: Configure AWS CLI.
 aws configure set aws_access_key_id $AWS_ACCESS_KEY
 aws configure set aws_secret_access_key $AWS_SECRET_KEY
 aws configure set region $AWS_REGION
 
-# Backup script (primary only)
+# NOTE: Define backup script (primary only).
 if [ "$ROLE" == "primary" ]; then
   HOSTNAME=$(hostname -f)
   cat <<EOF | sudo tee $BACKUP_SCRIPT
@@ -173,17 +170,18 @@ EOF
   echo "0 2 * * * root $BACKUP_SCRIPT" | sudo tee /etc/cron.d/mongo-backup
 fi
 
-# Health check cron
+# NOTE: Setup health checks.
 cat <<EOF | sudo tee /usr/local/bin/mongo_health_check.sh
 #!/bin/bash
 if ! pgrep mongod > /dev/null; then
   echo "MongoDB is DOWN on \$(hostname -f)" | mail -s "MongoDB DOWN ALERT" $ALERT_EMAIL
 fi
 EOF
+
 chmod +x /usr/local/bin/mongo_health_check.sh
 echo "*/5 * * * * root /usr/local/bin/mongo_health_check.sh" | sudo tee /etc/cron.d/mongo-health-check
 
-# /monitor endpoint
+# NOTE: Define script for /monitor endpoint.
 cat <<EOF | sudo tee /usr/local/bin/mongo_monitor.sh
 #!/bin/bash
 read QUERY_STRING
@@ -201,11 +199,12 @@ echo "Memory: \$MEM"
 echo "CPU: \$CPU"
 echo "Disk: \$DISK"
 EOF
+
 chmod +x /usr/local/bin/mongo_monitor.sh
 
+# NOTE: Update nginx config for /monitor.
 sudo systemctl stop nginx
 
-# Nginx config for /monitor
 cat <<EOF | sudo tee /etc/nginx/conf.d/monitor.conf
 server {
   listen 80;
@@ -228,7 +227,7 @@ fi
 sudo systemctl enable fcgiwrap
 sudo systemctl start fcgiwrap
 
-# UFW rules
+# NOTE: Setup UFW rules.
 sudo ufw allow ssh
 sudo ufw allow 443/tcp
 sudo ufw allow 80/tcp
