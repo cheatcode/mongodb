@@ -11,9 +11,10 @@ This repository contains a comprehensive set of scripts for deploying, securing,
 5. [Step 2: Provision SSL Certificates](#step-2-provision-ssl-certificates)
 6. [Step 3: Set Up Monitoring](#step-3-set-up-monitoring)
 7. [Managing Replica Sets](#managing-replica-sets)
-8. [Backup and Restore](#backup-and-restore)
-9. [Troubleshooting](#troubleshooting)
-10. [Reset and Cleanup](#reset-and-cleanup)
+8. [Connection Information](#connection-information)
+9. [Backup and Restore](#backup-and-restore)
+10. [Troubleshooting](#troubleshooting)
+11. [Reset and Cleanup](#reset-and-cleanup)
 
 ## Overview
 
@@ -260,6 +261,35 @@ If you're setting up a replica set with multiple nodes, you'll need to add secon
    ```
 
    Replace `$MONGO_PORT` with the port you specified in config.json.
+
+## Connection Information
+
+After setting up MongoDB, you can get the connection information in JSON format:
+
+```bash
+./connection_info.sh
+```
+
+This will output a JSON object containing:
+- Username and password
+- List of all hosts in the replica set with their roles
+- SSL status
+- Connection string for use in applications
+
+Example output:
+```json
+{
+  "username": "admin",
+  "password": "your_secure_password",
+  "hosts": [
+    { "hostname": "mdb1.example.com", "port": "27017", "state": "primary" },
+    { "hostname": "mdb2.example.com", "port": "27017", "state": "secondary" }
+  ],
+  "ssl_enabled": true,
+  "replica_set": "rs0",
+  "connection_string": "mongodb://admin:your_secure_password@mdb1.example.com:27017,mdb2.example.com:27017/?ssl=true&authSource=admin&replicaSet=rs0"
+}
+```
 
 ## Backup and Restore
 
