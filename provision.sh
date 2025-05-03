@@ -57,11 +57,14 @@ fi
 # NOTE: Install official nginx.org build with --with-stream (required for proxying to MongoDB).
 curl https://nginx.org/keys/nginx_signing.key | sudo gpg --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg
 echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/ubuntu $(lsb_release -cs) nginx" | sudo tee /etc/apt/sources.list.d/nginx.list
+
 sudo apt update
+
 sudo apt remove -y nginx nginx-common nginx-core || true
 sudo apt install -y nginx
-
 sudo apt install -y certbot python3-certbot-nginx
+
+sudo systemctl enable nginx
 
 # NOTE: Update mongod.conf.
 cat <<EOF | sudo tee $MONGO_CONF
@@ -87,17 +90,20 @@ sudo systemctl start mongod
 # NOTE: Wait for MongoDB to start.
 sleep 10
 
+# NOTE: Init the replica set.
+
+if [ "$ROLE" == "primary" ]; then
+  mongosh --eval "rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'localhost:27017' }]})"
+fi
+
 # NOTE: Create admin user.
-mongo --eval "db.getSiblingDB('admin').createUser({ user: '$DB_USERNAME', pwd: '$DB_PASSWORD', roles: [ { role: 'root', db: 'admin' } ] })" || echo "Admin user may already exist."
+mongosh --eval "db.getSiblingDB('admin').createUser({ user: '$DB_USERNAME', pwd: '$DB_PASSWORD', roles: [ { role: 'root', db: 'admin' } ] })" || echo "Admin user may already exist."
 
 # NOTE: Get Let's Encrypt cert.
-sudo certbot certonly --nginx --non-interactive --agree-tos --email admin@$DOMAIN -d $DOMAIN
+sudo certbot certonly --standalone --non-interactive --agree-tos --email admin@$DOMAIN -d $DOMAIN
 
 # NOTE: Setup SSL renew cron
-echo "0 3 * * * root certbot renew --nginx --quiet" | sudo tee /etc/cron.d/certbot-renew
-
-# NOTE: Stop Nginx to avoid weird restart errors.
-sudo systemctl stop nginx
+echo "0 3 * * * root certbot renew --standalone --quiet" | sudo tee /etc/cron.d/certbot-renew
 
 # NOTE: Modify Nginx config to include stream directive for routing to Mongo.
 sudo sed -i '/^http {/i stream {\n  upstream mongo_backend {\n    server 127.0.0.1:27017;\n  }\n  server {\n    listen 443 ssl;\n    ssl_certificate /etc/letsencrypt/live/'$DOMAIN'/fullchain.pem;\n    ssl_certificate_key /etc/letsencrypt/live/'$DOMAIN'/privkey.pem;\n    proxy_pass mongo_backend;\n  }\n}\n' /etc/nginx/nginx.conf
@@ -202,9 +208,6 @@ EOF
 
 chmod +x /usr/local/bin/mongo_monitor.sh
 
-# NOTE: Update nginx config for /monitor.
-sudo systemctl stop nginx
-
 cat <<EOF | sudo tee /etc/nginx/conf.d/monitor.conf
 server {
   listen 80;
@@ -219,7 +222,7 @@ server {
 EOF
 
 if sudo nginx -t; then
-  sudo systemctl start nginx
+  sudo systemctl reload nginx
 else
   echo "❌ nginx config test failed; skipping nginx start."
 fi

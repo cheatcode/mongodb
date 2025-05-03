@@ -29,3 +29,21 @@ git clone https://github.com/cheatcode/mongodb.git
 
 Let this copy into the /root/mongodb directory.
 
+## Make sure all executables are executable
+
+```
+chmod +x <file>.sh
+```
+
+# Provisioning
+
+To start provisioning, run:
+
+# On primary node
+./provision.sh primary rs0 <domain>
+
+# On secondary node
+./provision.sh secondary rs0 <domain>
+
+# On arbiter node
+./provision.sh arbiter rs0 <domain>
