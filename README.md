@@ -1,6 +1,6 @@
-# MongoDB Deployment with SSL and Monitoring
+# MongoDB Deployment with TLS and Monitoring
 
-This repository contains a comprehensive set of scripts for deploying, securing, and monitoring MongoDB instances. The scripts are designed to be modular, allowing you to set up MongoDB with proper security, SSL encryption, and monitoring capabilities.
+This repository contains a comprehensive set of scripts for deploying, securing, and monitoring MongoDB instances. The scripts are designed to be modular, allowing you to set up MongoDB with proper security, TLS encryption, and monitoring capabilities.
 
 ## Table of Contents
 
@@ -8,7 +8,7 @@ This repository contains a comprehensive set of scripts for deploying, securing,
 2. [Prerequisites](#prerequisites)
 3. [Initial Setup](#initial-setup)
 4. [Step 1: Bootstrap MongoDB](#step-1-bootstrap-mongodb)
-5. [Step 2: Provision SSL Certificates](#step-2-provision-ssl-certificates)
+5. [Step 2: Provision TLS Certificates](#step-2-provision-tls-certificates)
 6. [Step 3: Set Up Monitoring](#step-3-set-up-monitoring)
 7. [Managing Replica Sets](#managing-replica-sets)
 8. [Connection Information](#connection-information)
@@ -21,7 +21,7 @@ This repository contains a comprehensive set of scripts for deploying, securing,
 This deployment solution consists of several scripts that handle different aspects of MongoDB deployment:
 
 - **bootstrap.sh**: Sets up MongoDB with proper configuration, security, and backup capabilities
-- **provision_ssl.sh**: Provisions SSL certificates and configures MongoDB to use SSL
+- **provision_ssl.sh**: Provisions SSL certificates and configures MongoDB to use TLS
 - **monitoring.sh**: Sets up email alerts and a monitoring endpoint
 - **Utility scripts**: Additional scripts for managing replica sets, backups, and more
 
@@ -93,7 +93,8 @@ Before you begin, ensure you have:
      "smtp_pass": "your-smtp-password",
      "monitor_token": "your_secure_monitor_token",
      "replica_set_key": "your_replica_set_key",
-     "mongo_port": "27017"
+     "mongo_port": "27017",
+     "domain_name": "your.domain.com"
    }
    ```
 
@@ -149,11 +150,11 @@ The bootstrap script installs MongoDB, configures it with proper security settin
 
    You should see that MongoDB is active and running.
 
-## Step 2: Provision SSL Certificates
+## Step 2: Provision TLS Certificates
 
-The provision_ssl script obtains SSL certificates from Let's Encrypt and configures MongoDB to use them.
+The provision_ssl script obtains SSL certificates from Let's Encrypt and configures MongoDB to use TLS.
 
-1. **Run the SSL provisioning script**:
+1. **Run the TLS provisioning script**:
 
    ```bash
    ./provision_ssl.sh your-domain.com
@@ -166,21 +167,22 @@ The provision_ssl script obtains SSL certificates from Let's Encrypt and configu
    - Installs certbot if not already installed
    - Obtains SSL certificates from Let's Encrypt
    - Concatenates the certificate files into a single PEM file for MongoDB
-   - Updates the MongoDB configuration to use SSL
+   - Updates the MongoDB configuration to use TLS with proper settings
    - Sets up automatic certificate renewal with a hook to update MongoDB
-   - Restarts MongoDB with the new SSL configuration
+   - Configures MongoDB to allow connections from outside the server (bindIp: 0.0.0.0)
+   - Restarts MongoDB with the new TLS configuration
 
-3. **Verify SSL is working**:
+3. **Verify TLS is working**:
 
-   The script will verify that MongoDB is running with SSL. You can also check manually:
+   The script will verify that MongoDB is running with TLS. You can also check manually:
 
    ```bash
-   sudo mongosh --port $MONGO_PORT --ssl --sslCAFile /etc/ssl/mongodb.pem --eval "db.adminCommand({ getParameter: 1, sslMode: 1 })"
+   sudo mongosh --host your-domain.com --port $MONGO_PORT --tls -u admin -p your_password --authenticationDatabase admin --eval "db.adminCommand({ getParameter: 1, tlsMode: 1 })"
    ```
 
    Replace `$MONGO_PORT` with the port you specified in config.json.
 
-   You should see output indicating that `sslMode` is set to `requireSSL`.
+   You should see output indicating that `tlsMode` is set to `requireTLS`.
 
 ## Step 3: Set Up Monitoring
 
@@ -285,9 +287,9 @@ Example output:
     { "hostname": "mdb1.example.com", "port": "27017", "state": "primary" },
     { "hostname": "mdb2.example.com", "port": "27017", "state": "secondary" }
   ],
-  "ssl_enabled": true,
+  "tls_enabled": true,
   "replica_set": "rs0",
-  "connection_string": "mongodb://admin:your_secure_password@mdb1.example.com:27017,mdb2.example.com:27017/?ssl=true&authSource=admin&replicaSet=rs0"
+  "connection_string": "mongodb://admin:your_secure_password@mdb1.example.com:27017,mdb2.example.com:27017/?tls=true&authSource=admin&replicaSet=rs0"
 }
 ```
 
@@ -331,13 +333,13 @@ If you encounter issues during the setup process, here are some common troublesh
    sudo certbot certificates
    ```
 
-4. **Test MongoDB connection with SSL**:
+4. **Test MongoDB connection with TLS**:
 
    ```bash
-   sudo mongosh --port $MONGO_PORT --ssl --sslCAFile /etc/ssl/mongodb.pem -u admin -p your_password --authenticationDatabase admin
+   sudo mongosh --host your-domain.com --port $MONGO_PORT --tls -u admin -p your_password --authenticationDatabase admin
    ```
 
-   Replace `$MONGO_PORT` with the port you specified in config.json.
+   Replace `$MONGO_PORT` with the port you specified in config.json and `your-domain.com` with your actual domain name.
 
 5. **Check nginx configuration**:
 
@@ -364,4 +366,4 @@ If you need to reset your server and remove all installed components, you can us
 
 ---
 
-This deployment solution provides a secure, monitored MongoDB installation with SSL encryption and automatic backups. If you have any questions or issues, please open an issue on the GitHub repository.
+This deployment solution provides a secure, monitored MongoDB installation with TLS encryption and automatic backups. If you have any questions or issues, please open an issue on the GitHub repository.
