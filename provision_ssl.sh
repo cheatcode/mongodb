@@ -91,17 +91,27 @@ DOMAIN="$DOMAIN"
 FULLCHAIN="/etc/letsencrypt/live/\${DOMAIN}/fullchain.pem"
 PRIVKEY="/etc/letsencrypt/live/\${DOMAIN}/privkey.pem"
 OUTPUT="$SSL_PEM_PATH"
+MONGO_CA_FILE="/etc/ssl/mongodb-ca.pem"
 
 if [[ ! -f "\$FULLCHAIN" || ! -f "\$PRIVKEY" ]]; then
   echo "Certificate files not found for \$DOMAIN" >&2
   exit 1
 fi
 
+# Update the concatenated certificate file
 cat "\$FULLCHAIN" "\$PRIVKEY" > "\$OUTPUT"
 chmod 600 "\$OUTPUT"
 chown mongodb:mongodb "\$OUTPUT"
 
 echo "MongoDB TLS PEM file updated at \$OUTPUT"
+
+# Create a copy of fullchain.pem accessible by MongoDB
+echo "Copying fullchain.pem to \$MONGO_CA_FILE for MongoDB access..."
+cp "\$FULLCHAIN" "\$MONGO_CA_FILE"
+chmod 644 "\$MONGO_CA_FILE"
+chown mongodb:mongodb "\$MONGO_CA_FILE"
+
+echo "MongoDB CA file updated at \$MONGO_CA_FILE"
 
 # Check if MongoDB config needs updating
 MONGO_CONF="/etc/mongod.conf"
@@ -118,10 +128,10 @@ if grep -q "ssl:" "\$MONGO_CONF" && ! grep -q "tls:" "\$MONGO_CONF"; then
   
   # Add CAFile if it doesn't exist
   if ! grep -q "CAFile:" "\$MONGO_CONF"; then
-    sed -i '/certificateKeyFile:/a\\    CAFile: \$FULLCHAIN' "\$MONGO_CONF"
+    sed -i '/certificateKeyFile:/a\\    CAFile: \$MONGO_CA_FILE' "\$MONGO_CONF"
   else
-    # Update CAFile to use fullchain.pem
-    sed -i '/CAFile:/c\\    CAFile: \$FULLCHAIN' "\$MONGO_CONF"
+    # Update CAFile to use the accessible copy
+    sed -i '/CAFile:/c\\    CAFile: \$MONGO_CA_FILE' "\$MONGO_CONF"
   fi
   
   # Add allowConnectionsWithoutCertificates if it doesn't exist
@@ -185,24 +195,38 @@ if [ -f "$MONGO_CONF" ]; then
   else
     # Check if net section already exists
     if grep -q "net:" "$MONGO_CONF" && ! grep -q "  tls:" "$MONGO_CONF"; then
-      # Get the fullchain.pem path
+      # Get the fullchain.pem path and create a copy accessible by MongoDB
       FULLCHAIN_PEM="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
+      MONGO_CA_FILE="/etc/ssl/mongodb-ca.pem"
+      
+      # Copy fullchain.pem to a location accessible by MongoDB
+      echo "Copying fullchain.pem to $MONGO_CA_FILE for MongoDB access..."
+      sudo cp "$FULLCHAIN_PEM" "$MONGO_CA_FILE"
+      sudo chmod 644 "$MONGO_CA_FILE"
+      sudo chown mongodb:mongodb "$MONGO_CA_FILE"
       
       # Add TLS configuration under existing net section
       echo "Adding TLS configuration to existing net section..."
-      sudo sed -i '/net:/a\  tls:\n    mode: requireTLS\n    certificateKeyFile: '"$SSL_PEM_PATH"'\n    CAFile: '"$FULLCHAIN_PEM"'\n    allowConnectionsWithoutCertificates: true' "$MONGO_CONF"
+      sudo sed -i '/net:/a\  tls:\n    mode: requireTLS\n    certificateKeyFile: '"$SSL_PEM_PATH"'\n    CAFile: '"$MONGO_CA_FILE"'\n    allowConnectionsWithoutCertificates: true' "$MONGO_CONF"
       
       # Update bindIp to listen on all interfaces
       echo "Updating bindIp to listen on all interfaces..."
       sudo sed -i '/bindIp:/c\  bindIp: 0.0.0.0' "$MONGO_CONF"
     elif grep -q "net:" "$MONGO_CONF" && grep -q "  tls:" "$MONGO_CONF"; then
-      # Get the fullchain.pem path
+      # Get the fullchain.pem path and create a copy accessible by MongoDB
       FULLCHAIN_PEM="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
+      MONGO_CA_FILE="/etc/ssl/mongodb-ca.pem"
+      
+      # Copy fullchain.pem to a location accessible by MongoDB
+      echo "Copying fullchain.pem to $MONGO_CA_FILE for MongoDB access..."
+      sudo cp "$FULLCHAIN_PEM" "$MONGO_CA_FILE"
+      sudo chmod 644 "$MONGO_CA_FILE"
+      sudo chown mongodb:mongodb "$MONGO_CA_FILE"
       
       # Update existing TLS configuration
       echo "Updating existing TLS configuration..."
       sudo sed -i '/tls:/,/[a-z]/ s|certificateKeyFile:.*|certificateKeyFile: '"$SSL_PEM_PATH"'|' "$MONGO_CONF"
-      sudo sed -i '/tls:/,/[a-z]/ s|CAFile:.*|CAFile: '"$FULLCHAIN_PEM"'|' "$MONGO_CONF"
+      sudo sed -i '/tls:/,/[a-z]/ s|CAFile:.*|CAFile: '"$MONGO_CA_FILE"'|' "$MONGO_CONF"
       
       # Add allowConnectionsWithoutCertificates if it doesn't exist
       if ! grep -q "allowConnectionsWithoutCertificates:" "$MONGO_CONF"; then
@@ -213,12 +237,19 @@ if [ -f "$MONGO_CONF" ]; then
       echo "Updating bindIp to listen on all interfaces..."
       sudo sed -i '/bindIp:/c\  bindIp: 0.0.0.0' "$MONGO_CONF"
     elif ! grep -q "net:" "$MONGO_CONF"; then
-      # Get the fullchain.pem path
+      # Get the fullchain.pem path and create a copy accessible by MongoDB
       FULLCHAIN_PEM="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
+      MONGO_CA_FILE="/etc/ssl/mongodb-ca.pem"
+      
+      # Copy fullchain.pem to a location accessible by MongoDB
+      echo "Copying fullchain.pem to $MONGO_CA_FILE for MongoDB access..."
+      sudo cp "$FULLCHAIN_PEM" "$MONGO_CA_FILE"
+      sudo chmod 644 "$MONGO_CA_FILE"
+      sudo chown mongodb:mongodb "$MONGO_CA_FILE"
       
       # Add net section with TLS configuration
       echo "Adding new net section with TLS configuration..."
-      echo -e "\nnet:\n  bindIp: 0.0.0.0\n  tls:\n    mode: requireTLS\n    certificateKeyFile: $SSL_PEM_PATH\n    CAFile: $FULLCHAIN_PEM\n    allowConnectionsWithoutCertificates: true" | sudo tee -a "$MONGO_CONF"
+      echo -e "\nnet:\n  bindIp: 0.0.0.0\n  tls:\n    mode: requireTLS\n    certificateKeyFile: $SSL_PEM_PATH\n    CAFile: $MONGO_CA_FILE\n    allowConnectionsWithoutCertificates: true" | sudo tee -a "$MONGO_CONF"
     fi
     
     # Remove any old SSL configuration if it exists
@@ -319,6 +350,54 @@ if sudo systemctl is-active --quiet mongod; then
 else
   echo "❌ ERROR: MongoDB failed to restart. Check logs with: sudo journalctl -u mongod"
   exit 1
+fi
+
+# Update replica set configuration to use domain name instead of localhost
+echo "Updating replica set configuration to use domain name..."
+if [ -f "$CONFIG_FILE" ]; then
+  DB_USERNAME=$(jq -r '.db_username' "$CONFIG_FILE")
+  DB_PASSWORD=$(jq -r '.db_password' "$CONFIG_FILE")
+  MONGO_PORT=$(jq -r '.mongo_port' "$CONFIG_FILE")
+  
+  # Define TLS arguments for MongoDB connection
+  TLS_ARGS=""
+  if [ -f "$SSL_PEM_PATH" ] && grep -q "tls:" /etc/mongod.conf && grep -q "mode: requireTLS" /etc/mongod.conf; then
+    TLS_ARGS="--tls"
+  elif [ -f "$SSL_PEM_PATH" ] && grep -q "ssl:" /etc/mongod.conf && grep -q "mode: requireSSL" /etc/mongod.conf; then
+    TLS_ARGS="--ssl"
+  fi
+  
+  # Get current replica set configuration
+  TEMP_FILE=$(mktemp)
+  if mongosh --host localhost --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "JSON.stringify(rs.conf())" > $TEMP_FILE 2>/dev/null; then
+    # Check if any member is using localhost
+    if grep -q "localhost" $TEMP_FILE; then
+      echo "Found localhost in replica set configuration. Updating to use domain name..."
+      
+      # Update replica set configuration to use domain name
+      if mongosh --host localhost --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval "
+        var config = rs.conf();
+        for (var i = 0; i < config.members.length; i++) {
+          if (config.members[i].host.includes('localhost')) {
+            var port = config.members[i].host.split(':')[1];
+            config.members[i].host = '$DOMAIN:' + port;
+          }
+        }
+        rs.reconfig(config);
+      " 2>/dev/null; then
+        echo "✅ Replica set configuration updated to use domain name"
+      else
+        echo "⚠️ WARNING: Failed to update replica set configuration. You may need to update it manually."
+      fi
+    else
+      echo "Replica set configuration already using domain name. No update needed."
+    fi
+  else
+    echo "⚠️ WARNING: Failed to get replica set configuration. You may need to update it manually."
+  fi
+  rm -f $TEMP_FILE
+else
+  echo "⚠️ WARNING: config.json not found. Unable to update replica set configuration."
 fi
 
 echo "✅ TLS provisioning and MongoDB configuration complete for $DOMAIN"

@@ -12,5 +12,6 @@
   "smtp_pass": "your-postmark-password",
   "monitor_token": "your_secure_token",
   "replica_set_key": "your_replica_set_key",
-  "mongo_port": "your_mongodb_port"
+  "mongo_port": "your_mongodb_port",
+  "domain_name": "your.domain.com"
 }

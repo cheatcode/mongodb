@@ -51,6 +51,9 @@ fi
 # Get replica set status and extract members
 TEMP_FILE=$(mktemp)
 
+# Store the original domain name for the connection string
+CONNECTION_DOMAIN="$DOMAIN"
+
 # Try to connect using the domain name first (if not localhost)
 if [ "$DOMAIN" != "localhost" ]; then
   echo "Attempting to connect to MongoDB using domain name: $DOMAIN"
@@ -61,7 +64,8 @@ if [ "$DOMAIN" != "localhost" ]; then
     # If that fails, try connecting using localhost
     if mongosh --host localhost --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "JSON.stringify(rs.status())" > $TEMP_FILE 2>/dev/null; then
       echo "✅ Successfully connected to MongoDB using localhost."
-      DOMAIN="localhost"  # Set DOMAIN to localhost for connection string
+      # Note: We're not changing CONNECTION_DOMAIN, only the DOMAIN for the current connection
+      DOMAIN="localhost"
     else
       echo "❌ ERROR: Failed to connect to MongoDB using both domain name and localhost."
       rm $TEMP_FILE
@@ -93,9 +97,9 @@ rm $TEMP_FILE
 
 # Build connection string
 if [ "$TLS_ENABLED" = true ]; then
-  CONNECTION_STRING="mongodb://$DB_USERNAME:$DB_PASSWORD@$(echo $HOSTS_JSON | jq -r 'map(.hostname + ":" + .port) | join(",")' || echo "$DOMAIN:$MONGO_PORT")/?tls=true&authSource=admin&replicaSet=$REPLICA_SET"
+  CONNECTION_STRING="mongodb://$DB_USERNAME:$DB_PASSWORD@$(echo $HOSTS_JSON | jq -r 'map(.hostname + ":" + .port) | join(",")' || echo "$CONNECTION_DOMAIN:$MONGO_PORT")/?tls=true&authSource=admin&replicaSet=$REPLICA_SET"
 else
-  CONNECTION_STRING="mongodb://$DB_USERNAME:$DB_PASSWORD@$(echo $HOSTS_JSON | jq -r 'map(.hostname + ":" + .port) | join(",")' || echo "$DOMAIN:$MONGO_PORT")/?authSource=admin&replicaSet=$REPLICA_SET"
+  CONNECTION_STRING="mongodb://$DB_USERNAME:$DB_PASSWORD@$(echo $HOSTS_JSON | jq -r 'map(.hostname + ":" + .port) | join(",")' || echo "$CONNECTION_DOMAIN:$MONGO_PORT")/?authSource=admin&replicaSet=$REPLICA_SET"
 fi
 
 # Output JSON
