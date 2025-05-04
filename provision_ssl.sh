@@ -138,6 +138,16 @@ if grep -q "ssl:" "\$MONGO_CONF" && ! grep -q "tls:" "\$MONGO_CONF"; then
   if ! grep -q "allowConnectionsWithoutCertificates:" "\$MONGO_CONF"; then
     sed -i '/CAFile:/a\\    allowConnectionsWithoutCertificates: true' "\$MONGO_CONF"
   fi
+  
+  # Add allowInvalidHostnames if it doesn't exist
+  if ! grep -q "allowInvalidHostnames:" "\$MONGO_CONF"; then
+    sed -i '/allowConnectionsWithoutCertificates:/a\\    allowInvalidHostnames: true' "\$MONGO_CONF"
+  fi
+  
+  # Add allowInvalidCertificates if it doesn't exist
+  if ! grep -q "allowInvalidCertificates:" "\$MONGO_CONF"; then
+    sed -i '/allowInvalidHostnames:/a\\    allowInvalidCertificates: true' "\$MONGO_CONF"
+  fi
 fi
 
 # Restart MongoDB to use the new certificate
@@ -207,7 +217,7 @@ if [ -f "$MONGO_CONF" ]; then
       
       # Add TLS configuration under existing net section
       echo "Adding TLS configuration to existing net section..."
-      sudo sed -i '/net:/a\  tls:\n    mode: requireTLS\n    certificateKeyFile: '"$SSL_PEM_PATH"'\n    CAFile: '"$MONGO_CA_FILE"'\n    allowConnectionsWithoutCertificates: true' "$MONGO_CONF"
+      sudo sed -i '/net:/a\  tls:\n    mode: requireTLS\n    certificateKeyFile: '"$SSL_PEM_PATH"'\n    CAFile: '"$MONGO_CA_FILE"'\n    allowConnectionsWithoutCertificates: true\n    allowInvalidHostnames: true\n    allowInvalidCertificates: true' "$MONGO_CONF"
       
       # Update bindIp to listen on all interfaces
       echo "Updating bindIp to listen on all interfaces..."
@@ -233,6 +243,16 @@ if [ -f "$MONGO_CONF" ]; then
         sudo sed -i '/CAFile:/a\    allowConnectionsWithoutCertificates: true' "$MONGO_CONF"
       fi
       
+      # Add allowInvalidHostnames if it doesn't exist
+      if ! grep -q "allowInvalidHostnames:" "$MONGO_CONF"; then
+        sudo sed -i '/allowConnectionsWithoutCertificates:/a\    allowInvalidHostnames: true' "$MONGO_CONF"
+      fi
+      
+      # Add allowInvalidCertificates if it doesn't exist
+      if ! grep -q "allowInvalidCertificates:" "$MONGO_CONF"; then
+        sudo sed -i '/allowInvalidHostnames:/a\    allowInvalidCertificates: true' "$MONGO_CONF"
+      fi
+      
       # Update bindIp to listen on all interfaces
       echo "Updating bindIp to listen on all interfaces..."
       sudo sed -i '/bindIp:/c\  bindIp: 0.0.0.0' "$MONGO_CONF"
@@ -249,7 +269,7 @@ if [ -f "$MONGO_CONF" ]; then
       
       # Add net section with TLS configuration
       echo "Adding new net section with TLS configuration..."
-      echo -e "\nnet:\n  bindIp: 0.0.0.0\n  tls:\n    mode: requireTLS\n    certificateKeyFile: $SSL_PEM_PATH\n    CAFile: $MONGO_CA_FILE\n    allowConnectionsWithoutCertificates: true" | sudo tee -a "$MONGO_CONF"
+      echo -e "\nnet:\n  bindIp: 0.0.0.0\n  tls:\n    mode: requireTLS\n    certificateKeyFile: $SSL_PEM_PATH\n    CAFile: $MONGO_CA_FILE\n    allowConnectionsWithoutCertificates: true\n    allowInvalidHostnames: true\n    allowInvalidCertificates: true" | sudo tee -a "$MONGO_CONF"
     fi
     
     # Remove any old SSL configuration if it exists
@@ -352,8 +372,11 @@ else
   exit 1
 fi
 
-# Update replica set configuration to use domain name instead of localhost
-echo "Updating replica set configuration to use domain name..."
+# Check if this is a primary or secondary node
+echo "Checking if this is a primary or secondary node..."
+IS_PRIMARY=false
+IS_INITIALIZED=false
+
 if [ -f "$CONFIG_FILE" ]; then
   DB_USERNAME=$(jq -r '.db_username' "$CONFIG_FILE")
   DB_PASSWORD=$(jq -r '.db_password' "$CONFIG_FILE")
@@ -367,35 +390,70 @@ if [ -f "$CONFIG_FILE" ]; then
     TLS_ARGS="--ssl"
   fi
   
-  # Get current replica set configuration
-  TEMP_FILE=$(mktemp)
-  if mongosh --host localhost --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "JSON.stringify(rs.conf())" > $TEMP_FILE 2>/dev/null; then
-    # Check if any member is using localhost
-    if grep -q "localhost" $TEMP_FILE; then
-      echo "Found localhost in replica set configuration. Updating to use domain name..."
-      
-      # Update replica set configuration to use domain name
-      if mongosh --host localhost --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval "
-        var config = rs.conf();
-        for (var i = 0; i < config.members.length; i++) {
-          if (config.members[i].host.includes('localhost')) {
-            var port = config.members[i].host.split(':')[1];
-            config.members[i].host = '$DOMAIN:' + port;
-          }
-        }
-        rs.reconfig(config);
-      " 2>/dev/null; then
-        echo "✅ Replica set configuration updated to use domain name"
-      else
-        echo "⚠️ WARNING: Failed to update replica set configuration. You may need to update it manually."
-      fi
+  # First check if the node is initialized (part of a replica set)
+  if mongosh --host localhost --port $MONGO_PORT --quiet --eval "JSON.stringify(rs.status())" 2>/dev/null | grep -q '"ok":1'; then
+    IS_INITIALIZED=true
+    echo "This node is initialized as part of a replica set."
+    
+    # Now check if it's primary
+    if mongosh --host localhost --port $MONGO_PORT --quiet --eval "JSON.stringify(rs.isMaster())" 2>/dev/null | grep -q '"ismaster":true'; then
+      IS_PRIMARY=true
+      echo "This node is the primary."
     else
-      echo "Replica set configuration already using domain name. No update needed."
+      echo "This node is a secondary."
     fi
   else
-    echo "⚠️ WARNING: Failed to get replica set configuration. You may need to update it manually."
+    echo "This node is not yet initialized as part of a replica set."
   fi
-  rm -f $TEMP_FILE
+  
+  # Update replica set configuration or provide instructions
+  if [ "$IS_INITIALIZED" = true ] && [ "$IS_PRIMARY" = true ]; then
+    # This is a primary node, update replica set configuration
+    echo "Updating replica set configuration to use domain name..."
+    # Get current replica set configuration
+    TEMP_FILE=$(mktemp)
+    if mongosh --host localhost --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "JSON.stringify(rs.conf())" > $TEMP_FILE 2>/dev/null; then
+      # Check if any member is using localhost
+      if grep -q "localhost" $TEMP_FILE; then
+        echo "Found localhost in replica set configuration. Updating to use domain name..."
+        
+        # Update replica set configuration to use domain name
+        if mongosh --host localhost --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval "
+          var config = rs.conf();
+          for (var i = 0; i < config.members.length; i++) {
+            if (config.members[i].host.includes('localhost')) {
+              var port = config.members[i].host.split(':')[1];
+              config.members[i].host = '$DOMAIN:' + port;
+            }
+          }
+          rs.reconfig(config);
+        " 2>/dev/null; then
+          echo "✅ Replica set configuration updated to use domain name"
+        else
+          echo "⚠️ WARNING: Failed to update replica set configuration. You may need to update it manually."
+        fi
+      else
+        echo "Replica set configuration already using domain name. No update needed."
+      fi
+    else
+      echo "⚠️ WARNING: Failed to get replica set configuration. You may need to update it manually."
+    fi
+    rm -f $TEMP_FILE
+  elif [ "$IS_INITIALIZED" = true ] && [ "$IS_PRIMARY" = false ]; then
+    # This is a secondary node, provide instructions
+    echo "This is a secondary node. Skipping replica set configuration update."
+  elif [ "$IS_INITIALIZED" = false ]; then
+    # This node is not initialized, provide instructions for adding it to a replica set
+    echo ""
+    echo "This node is not yet part of a replica set. To add it to an existing replica set:"
+    echo ""
+    echo "1. On the primary node, run:"
+    echo "   ./utils/replica_sets.sh add $DOMAIN:$MONGO_PORT"
+    echo ""
+    echo "2. After adding this node to the replica set, authentication will be replicated from the primary."
+    echo ""
+    echo "Note: If you're setting up a new replica set, run bootstrap.sh with the 'primary' role first."
+  fi
 else
   echo "⚠️ WARNING: config.json not found. Unable to update replica set configuration."
 fi

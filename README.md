@@ -1,5 +1,7 @@
 # MongoDB Deployment with TLS and Monitoring
 
+> **⚠️ Security Notice**: This deployment uses Let's Encrypt certificates with `allowInvalidCertificates: true` and `allowInvalidHostnames: true` in the MongoDB configuration to simplify inter-node communication in replica sets. While this reduces certificate validation security, the deployment remains secure through strong authentication, custom port usage, and firewall rules. Always use strong passwords and restrict network access for production deployments.
+
 This repository contains a comprehensive set of scripts for deploying, securing, and monitoring MongoDB instances. The scripts are designed to be modular, allowing you to set up MongoDB with proper security, TLS encryption, and monitoring capabilities.
 
 ## Table of Contents
@@ -48,33 +50,24 @@ Before you begin, ensure you have:
    cd mongodb
    ```
 
-2. **Install the Micro text editor** (optional but recommended):
-
-   The Micro text editor provides a user-friendly interface for editing files via the command line, making it easier to edit configuration files.
-
-   ```bash
-   sudo apt update
-   sudo apt install -y micro
-   ```
-
-   After installation, you can edit files using:
-   ```bash
-   micro filename
-   ```
-
-3. **Make the setup script executable**:
+2. **Make the setup script executable**:
 
    ```bash
    chmod +x setup.sh
    ```
 
-4. **Run the setup script** to make all scripts executable:
+3. **Run the setup script** to make all scripts executable:
 
    ```bash
    ./setup.sh
    ```
 
-5. **Create and configure the config.json file**:
+   Note: The setup script will also install the Micro text editor, which provides a user-friendly interface for editing files via the command line. After installation, you can edit files using:
+   ```bash
+   micro filename
+   ```
+
+4. **Create and configure the config.json file**:
 
    Create a file named `config.json` in the repository root with the following content:
 
