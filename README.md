@@ -14,9 +14,10 @@ This repository contains a comprehensive set of scripts for deploying, securing,
 6. [Step 3: Set Up Monitoring](#step-3-set-up-monitoring)
 7. [Managing Replica Sets](#managing-replica-sets)
 8. [Connection Information](#connection-information)
-9. [Backup and Restore](#backup-and-restore)
-10. [Troubleshooting](#troubleshooting)
-11. [Reset and Cleanup](#reset-and-cleanup)
+9. [Password Rotation](#password-rotation)
+10. [Backup and Restore](#backup-and-restore)
+11. [Troubleshooting](#troubleshooting)
+12. [Reset and Cleanup](#reset-and-cleanup)
 
 ## Overview
 
@@ -285,6 +286,48 @@ Example output:
   "connection_string": "mongodb://admin:your_secure_password@mdb1.example.com:27017,mdb2.example.com:27017/?tls=true&authSource=admin&replicaSet=rs0"
 }
 ```
+
+## Password Rotation
+
+For security best practices, you should regularly rotate the MongoDB admin password. This needs to be done on the primary node and will automatically propagate to all secondary nodes in the replica set.
+
+1. **Connect to the primary node**:
+
+   ```bash
+   mongosh --host your-domain.com --port $MONGO_PORT --tls -u admin -p current_password --authenticationDatabase admin
+   ```
+
+   Replace `$MONGO_PORT` with the port you specified in config.json, and `current_password` with your current password.
+
+2. **Change the admin user's password**:
+
+   ```javascript
+   db.getSiblingDB("admin").changeUserPassword("admin", "new_secure_password")
+   ```
+
+   Replace `new_secure_password` with your new secure password.
+
+3. **Update the config.json file**:
+
+   After changing the password, update the `db_password` field in your config.json file:
+
+   ```bash
+   micro config.json
+   ```
+
+   This ensures that all scripts will continue to work with the new password.
+
+4. **Verify the new password**:
+
+   ```bash
+   mongosh --host your-domain.com --port $MONGO_PORT --tls -u admin -p new_secure_password --authenticationDatabase admin --eval "db.adminCommand('ping')"
+   ```
+
+   You should see a successful response with `{ ok: 1 }`.
+
+5. **Password Rotation Schedule**:
+
+   Consider implementing a regular password rotation schedule (e.g., every 90 days) as part of your security policy. You can use system cron jobs to remind you when it's time to rotate passwords.
 
 ## Backup and Restore
 
