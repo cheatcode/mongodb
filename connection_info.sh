@@ -24,19 +24,61 @@ if ! systemctl is-active --quiet mongod; then
   exit 1
 fi
 
-# Check if SSL is provisioned
+# Check if TLS is provisioned
 SSL_PEM_PATH="/etc/ssl/mongodb.pem"
-SSL_ENABLED=false
-if [ -f "$SSL_PEM_PATH" ] && grep -q "ssl:" /etc/mongod.conf && grep -q "mode: requireSSL" /etc/mongod.conf; then
-  SSL_ENABLED=true
-  SSL_ARGS="--ssl --sslCAFile $SSL_PEM_PATH"
+TLS_ENABLED=false
+if [ -f "$SSL_PEM_PATH" ] && grep -q "tls:" /etc/mongod.conf && grep -q "mode: requireTLS" /etc/mongod.conf; then
+  TLS_ENABLED=true
+  TLS_ARGS="--tls"
+elif [ -f "$SSL_PEM_PATH" ] && grep -q "ssl:" /etc/mongod.conf && grep -q "mode: requireSSL" /etc/mongod.conf; then
+  # For backward compatibility with older configurations
+  TLS_ENABLED=true
+  TLS_ARGS="--ssl"
 else
-  SSL_ARGS=""
+  TLS_ARGS=""
+fi
+
+# Get domain name from config.json if available
+DOMAIN_CONFIG=$(jq -r '.domain_name' "$CONFIG_FILE")
+if [ -n "$DOMAIN_CONFIG" ] && [ "$DOMAIN_CONFIG" != "null" ] && [ "$DOMAIN_CONFIG" != "your.domain.com" ]; then
+  DOMAIN="$DOMAIN_CONFIG"
+  echo "Using domain name from config.json: $DOMAIN"
+else
+  DOMAIN="localhost"
+  echo "Domain name not set in config.json. Using localhost for connection."
 fi
 
 # Get replica set status and extract members
 TEMP_FILE=$(mktemp)
-mongosh --port $MONGO_PORT $SSL_ARGS --quiet --eval "JSON.stringify(rs.status())" > $TEMP_FILE
+
+# Try to connect using the domain name first (if not localhost)
+if [ "$DOMAIN" != "localhost" ]; then
+  echo "Attempting to connect to MongoDB using domain name: $DOMAIN"
+  if mongosh --host $DOMAIN --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "JSON.stringify(rs.status())" > $TEMP_FILE 2>/dev/null; then
+    echo "✅ Successfully connected to MongoDB using domain name: $DOMAIN"
+  else
+    echo "Connection using domain name failed. Trying localhost..."
+    # If that fails, try connecting using localhost
+    if mongosh --host localhost --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "JSON.stringify(rs.status())" > $TEMP_FILE 2>/dev/null; then
+      echo "✅ Successfully connected to MongoDB using localhost."
+      DOMAIN="localhost"  # Set DOMAIN to localhost for connection string
+    else
+      echo "❌ ERROR: Failed to connect to MongoDB using both domain name and localhost."
+      rm $TEMP_FILE
+      exit 1
+    fi
+  fi
+else
+  # Just try localhost
+  echo "Attempting to connect to MongoDB using localhost"
+  if mongosh --host localhost --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "JSON.stringify(rs.status())" > $TEMP_FILE 2>/dev/null; then
+    echo "✅ Successfully connected to MongoDB using localhost."
+  else
+    echo "❌ ERROR: Failed to connect to MongoDB using localhost."
+    rm $TEMP_FILE
+    exit 1
+  fi
+fi
 
 # Check if the command was successful
 if [ $? -ne 0 ] || [ ! -s $TEMP_FILE ]; then
@@ -50,10 +92,10 @@ HOSTS_JSON=$(cat $TEMP_FILE | jq -c '[.members[] | {hostname: (.name | split(":"
 rm $TEMP_FILE
 
 # Build connection string
-if [ "$SSL_ENABLED" = true ]; then
-  CONNECTION_STRING="mongodb://$DB_USERNAME:$DB_PASSWORD@$(echo $HOSTS_JSON | jq -r 'map(.hostname + ":" + .port) | join(",")' || echo "localhost:$MONGO_PORT")/?ssl=true&authSource=admin&replicaSet=$REPLICA_SET"
+if [ "$TLS_ENABLED" = true ]; then
+  CONNECTION_STRING="mongodb://$DB_USERNAME:$DB_PASSWORD@$(echo $HOSTS_JSON | jq -r 'map(.hostname + ":" + .port) | join(",")' || echo "$DOMAIN:$MONGO_PORT")/?tls=true&authSource=admin&replicaSet=$REPLICA_SET"
 else
-  CONNECTION_STRING="mongodb://$DB_USERNAME:$DB_PASSWORD@$(echo $HOSTS_JSON | jq -r 'map(.hostname + ":" + .port) | join(",")' || echo "localhost:$MONGO_PORT")/?authSource=admin&replicaSet=$REPLICA_SET"
+  CONNECTION_STRING="mongodb://$DB_USERNAME:$DB_PASSWORD@$(echo $HOSTS_JSON | jq -r 'map(.hostname + ":" + .port) | join(",")' || echo "$DOMAIN:$MONGO_PORT")/?authSource=admin&replicaSet=$REPLICA_SET"
 fi
 
 # Output JSON
@@ -62,7 +104,7 @@ cat <<EOF
   "username": "$DB_USERNAME",
   "password": "$DB_PASSWORD",
   "hosts": $HOSTS_JSON,
-  "ssl_enabled": $SSL_ENABLED,
+  "tls_enabled": $TLS_ENABLED,
   "replica_set": "$REPLICA_SET",
   "connection_string": "$CONNECTION_STRING"
 }

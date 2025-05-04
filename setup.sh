@@ -14,6 +14,9 @@ if ! command -v micro &> /dev/null; then
   sudo apt install -y micro
 fi
 
+# Ensure that config.json is only readable by root user.
+chmod 600 /root/mongodb/config.json
+
 # Make all shell scripts executable
 echo "Making all shell scripts executable..."
 chmod +x *.sh

@@ -4,11 +4,26 @@ set -e
 
 ROLE=$1
 REPLICA_SET=$2
-DOMAIN=$3
 CONFIG_FILE="./config.json"
 
 if [ ! -f "$CONFIG_FILE" ]; then
   echo "Missing config.json! Exiting."
+  exit 1
+fi
+
+# Get domain name from config.json if available, otherwise use command line argument
+DOMAIN_ARG=$3
+DOMAIN_CONFIG=$(jq -r '.domain_name' "$CONFIG_FILE")
+
+if [ -n "$DOMAIN_ARG" ]; then
+  DOMAIN="$DOMAIN_ARG"
+elif [ -n "$DOMAIN_CONFIG" ] && [ "$DOMAIN_CONFIG" != "null" ] && [ "$DOMAIN_CONFIG" != "your.domain.com" ]; then
+  DOMAIN="$DOMAIN_CONFIG"
+else
+  echo "❌ ERROR: Domain name not provided as argument or in config.json."
+  echo "Please provide a domain name as the third argument or add it to config.json."
+  echo "Usage: $0 <role> <replica_set> [domain]"
+  echo "Example: $0 primary rs0 mdb1.example.com"
   exit 1
 fi
 
@@ -88,6 +103,7 @@ sudo systemctl start mongod
 sleep 10
 
 # NOTE: Init the replica set.
+HOSTNAME=$(hostname -f)
 
 if [ "$ROLE" == "primary" ]; then
   mongosh --port $MONGO_PORT --eval "rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'localhost:$MONGO_PORT' }]})"
@@ -124,20 +140,32 @@ aws configure set region $AWS_REGION
 
 # NOTE: Define backup script (primary only).
 if [ "$ROLE" == "primary" ]; then
-  HOSTNAME=$(hostname -f)
   cat <<EOF | sudo tee $BACKUP_SCRIPT
 #!/bin/bash
 TIMESTAMP=\$(date +%F-%H-%M)
 BACKUP_PATH="/tmp/mongo-backup-\$TIMESTAMP.gz"
 
-# Check if MongoDB SSL is configured
-SSL_PEM_PATH="/etc/ssl/mongodb.pem"
-if grep -q "ssl:" /etc/mongod.conf && grep -q "mode: requireSSL" /etc/mongod.conf; then
-  echo "MongoDB SSL is enabled. Using SSL connection for backup..."
-  mongodump --port $MONGO_PORT --ssl --sslCAFile \$SSL_PEM_PATH --username $DB_USERNAME --password $DB_PASSWORD --authenticationDatabase admin --archive=\$BACKUP_PATH --gzip
+# Get domain name from config.json if available
+DOMAIN_CONFIG=\$(jq -r '.domain_name' "$CONFIG_FILE")
+if [ -n "\$DOMAIN_CONFIG" ] && [ "\$DOMAIN_CONFIG" != "null" ] && [ "\$DOMAIN_CONFIG" != "your.domain.com" ]; then
+  HOSTNAME="\$DOMAIN_CONFIG"
+  echo "Using domain name from config.json: \$HOSTNAME"
 else
-  echo "MongoDB SSL is not enabled. Using standard connection for backup..."
-  mongodump --port $MONGO_PORT --username $DB_USERNAME --password $DB_PASSWORD --authenticationDatabase admin --archive=\$BACKUP_PATH --gzip
+  HOSTNAME=\$(hostname -f)
+  echo "Domain name not set in config.json. Using hostname: \$HOSTNAME"
+fi
+
+# Check if MongoDB TLS is configured
+SSL_PEM_PATH="/etc/ssl/mongodb.pem"
+if grep -q "tls:" /etc/mongod.conf && grep -q "mode: requireTLS" /etc/mongod.conf; then
+  echo "MongoDB TLS is enabled. Using TLS connection for backup..."
+  mongodump --host \$HOSTNAME --port $MONGO_PORT --tls -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --archive=\$BACKUP_PATH --gzip
+elif grep -q "ssl:" /etc/mongod.conf && grep -q "mode: requireSSL" /etc/mongod.conf; then
+  echo "MongoDB SSL is enabled. Using SSL connection for backup..."
+  mongodump --host \$HOSTNAME --port $MONGO_PORT --ssl -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --archive=\$BACKUP_PATH --gzip
+else
+  echo "MongoDB TLS is not enabled. Using standard connection for backup..."
+  mongodump --host \$HOSTNAME --port $MONGO_PORT -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --archive=\$BACKUP_PATH --gzip
 fi
 
 aws s3 cp \$BACKUP_PATH s3://$AWS_BUCKET/\$HOSTNAME/\$TIMESTAMP.gz --region $AWS_REGION

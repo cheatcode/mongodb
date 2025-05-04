@@ -5,13 +5,29 @@
 
 set -e
 
-if [ $# -ne 1 ]; then
+CONFIG_FILE="./config.json"
+
+# Get domain name from command line argument or config.json
+if [ $# -eq 1 ]; then
+  DOMAIN=$1
+elif [ -f "$CONFIG_FILE" ]; then
+  DOMAIN_CONFIG=$(jq -r '.domain_name' "$CONFIG_FILE")
+  if [ -n "$DOMAIN_CONFIG" ] && [ "$DOMAIN_CONFIG" != "null" ] && [ "$DOMAIN_CONFIG" != "your.domain.com" ]; then
+    DOMAIN="$DOMAIN_CONFIG"
+  else
+    echo "❌ ERROR: Domain name not provided as argument or in config.json."
+    echo "Please provide a domain name as an argument or add it to config.json."
+    echo "Usage: $0 <domain>"
+    echo "Example: $0 mdb1.example.com"
+    exit 1
+  fi
+else
+  echo "❌ ERROR: Domain name not provided and config.json not found."
+  echo "Please provide a domain name as an argument."
   echo "Usage: $0 <domain>"
   echo "Example: $0 mdb1.example.com"
   exit 1
 fi
-
-DOMAIN=$1
 MONGO_CONF="/etc/mongod.conf"
 SSL_PEM_PATH="/etc/ssl/mongodb.pem"
 
@@ -85,7 +101,34 @@ cat "\$FULLCHAIN" "\$PRIVKEY" > "\$OUTPUT"
 chmod 600 "\$OUTPUT"
 chown mongodb:mongodb "\$OUTPUT"
 
-echo "MongoDB SSL PEM file updated at \$OUTPUT"
+echo "MongoDB TLS PEM file updated at \$OUTPUT"
+
+# Check if MongoDB config needs updating
+MONGO_CONF="/etc/mongod.conf"
+if grep -q "ssl:" "\$MONGO_CONF" && ! grep -q "tls:" "\$MONGO_CONF"; then
+  echo "Updating MongoDB config to use TLS instead of deprecated SSL..."
+  # Backup the current MongoDB configuration
+  BACKUP_FILE="\${MONGO_CONF}.bak.\$(date +%Y%m%d%H%M%S)"
+  cp "\$MONGO_CONF" "\$BACKUP_FILE"
+  
+  # Replace SSL with TLS configuration
+  sed -i 's/ssl:/tls:/g' "\$MONGO_CONF"
+  sed -i 's/mode: requireSSL/mode: requireTLS/g' "\$MONGO_CONF"
+  sed -i 's/PEMKeyFile:/certificateKeyFile:/g' "\$MONGO_CONF"
+  
+  # Add CAFile if it doesn't exist
+  if ! grep -q "CAFile:" "\$MONGO_CONF"; then
+    sed -i '/certificateKeyFile:/a\\    CAFile: \$FULLCHAIN' "\$MONGO_CONF"
+  else
+    # Update CAFile to use fullchain.pem
+    sed -i '/CAFile:/c\\    CAFile: \$FULLCHAIN' "\$MONGO_CONF"
+  fi
+  
+  # Add allowConnectionsWithoutCertificates if it doesn't exist
+  if ! grep -q "allowConnectionsWithoutCertificates:" "\$MONGO_CONF"; then
+    sed -i '/CAFile:/a\\    allowConnectionsWithoutCertificates: true' "\$MONGO_CONF"
+  fi
+fi
 
 # Restart MongoDB to use the new certificate
 systemctl restart mongod
@@ -136,23 +179,52 @@ if [ -f "$MONGO_CONF" ]; then
   echo "Creating backup of MongoDB config at $BACKUP_FILE"
   sudo cp "$MONGO_CONF" "$BACKUP_FILE"
   
-  # Check if SSL is already configured
-  if grep -q "ssl:" "$MONGO_CONF" && grep -q "PEMKeyFile: $SSL_PEM_PATH" "$MONGO_CONF"; then
-    echo "MongoDB is already configured for SSL with the correct certificate path."
+  # Check if TLS is already configured
+  if grep -q "tls:" "$MONGO_CONF" && grep -q "certificateKeyFile: $SSL_PEM_PATH" "$MONGO_CONF"; then
+    echo "MongoDB is already configured for TLS with the correct certificate path."
   else
-    # Check if net.ssl section already exists
-    if grep -q "net:" "$MONGO_CONF" && ! grep -q "  ssl:" "$MONGO_CONF"; then
-      # Add SSL configuration under existing net section
-      echo "Adding SSL configuration to existing net section..."
-      sudo sed -i '/net:/a\  ssl:\n    mode: requireSSL\n    PEMKeyFile: '"$SSL_PEM_PATH"'\n    disabledProtocols: TLS1_0,TLS1_1' "$MONGO_CONF"
-    elif grep -q "net:" "$MONGO_CONF" && grep -q "  ssl:" "$MONGO_CONF"; then
-      # Update existing SSL configuration
-      echo "Updating existing SSL configuration..."
-      sudo sed -i '/ssl:/,/[a-z]/ s|PEMKeyFile:.*|PEMKeyFile: '"$SSL_PEM_PATH"'|' "$MONGO_CONF"
+    # Check if net section already exists
+    if grep -q "net:" "$MONGO_CONF" && ! grep -q "  tls:" "$MONGO_CONF"; then
+      # Get the fullchain.pem path
+      FULLCHAIN_PEM="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
+      
+      # Add TLS configuration under existing net section
+      echo "Adding TLS configuration to existing net section..."
+      sudo sed -i '/net:/a\  tls:\n    mode: requireTLS\n    certificateKeyFile: '"$SSL_PEM_PATH"'\n    CAFile: '"$FULLCHAIN_PEM"'\n    allowConnectionsWithoutCertificates: true' "$MONGO_CONF"
+      
+      # Update bindIp to listen on all interfaces
+      echo "Updating bindIp to listen on all interfaces..."
+      sudo sed -i '/bindIp:/c\  bindIp: 0.0.0.0' "$MONGO_CONF"
+    elif grep -q "net:" "$MONGO_CONF" && grep -q "  tls:" "$MONGO_CONF"; then
+      # Get the fullchain.pem path
+      FULLCHAIN_PEM="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
+      
+      # Update existing TLS configuration
+      echo "Updating existing TLS configuration..."
+      sudo sed -i '/tls:/,/[a-z]/ s|certificateKeyFile:.*|certificateKeyFile: '"$SSL_PEM_PATH"'|' "$MONGO_CONF"
+      sudo sed -i '/tls:/,/[a-z]/ s|CAFile:.*|CAFile: '"$FULLCHAIN_PEM"'|' "$MONGO_CONF"
+      
+      # Add allowConnectionsWithoutCertificates if it doesn't exist
+      if ! grep -q "allowConnectionsWithoutCertificates:" "$MONGO_CONF"; then
+        sudo sed -i '/CAFile:/a\    allowConnectionsWithoutCertificates: true' "$MONGO_CONF"
+      fi
+      
+      # Update bindIp to listen on all interfaces
+      echo "Updating bindIp to listen on all interfaces..."
+      sudo sed -i '/bindIp:/c\  bindIp: 0.0.0.0' "$MONGO_CONF"
     elif ! grep -q "net:" "$MONGO_CONF"; then
-      # Add net section with SSL configuration
-      echo "Adding new net section with SSL configuration..."
-      echo -e "\nnet:\n  ssl:\n    mode: requireSSL\n    PEMKeyFile: $SSL_PEM_PATH\n    disabledProtocols: TLS1_0,TLS1_1" | sudo tee -a "$MONGO_CONF"
+      # Get the fullchain.pem path
+      FULLCHAIN_PEM="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
+      
+      # Add net section with TLS configuration
+      echo "Adding new net section with TLS configuration..."
+      echo -e "\nnet:\n  bindIp: 0.0.0.0\n  tls:\n    mode: requireTLS\n    certificateKeyFile: $SSL_PEM_PATH\n    CAFile: $FULLCHAIN_PEM\n    allowConnectionsWithoutCertificates: true" | sudo tee -a "$MONGO_CONF"
+    fi
+    
+    # Remove any old SSL configuration if it exists
+    if grep -q "ssl:" "$MONGO_CONF"; then
+      echo "Removing deprecated SSL configuration..."
+      sudo sed -i '/ssl:/,/[a-z]/ d' "$MONGO_CONF"
     fi
   fi
 else
@@ -193,25 +265,62 @@ sleep 5
 if sudo systemctl is-active --quiet mongod; then
   echo "✅ MongoDB restarted successfully with SSL configuration"
   
-  # Verify SSL is actually working
-  echo "Verifying MongoDB SSL configuration..."
+  # Verify TLS is actually working
+  echo "Verifying MongoDB TLS configuration..."
+  # Get domain name from config.json if available
+  DOMAIN_CONFIG=$(jq -r '.domain_name' "$CONFIG_FILE")
+  if [ -n "$DOMAIN_CONFIG" ] && [ "$DOMAIN_CONFIG" != "null" ] && [ "$DOMAIN_CONFIG" != "your.domain.com" ]; then
+    DOMAIN="$DOMAIN_CONFIG"
+    echo "Using domain name from config.json: $DOMAIN"
+  else
+    DOMAIN="localhost"
+    echo "Domain name not set in config.json. Using localhost for verification."
+  fi
+  
+  # Load DB credentials from config.json
+  DB_USERNAME=$(jq -r '.db_username' "$CONFIG_FILE")
+  DB_PASSWORD=$(jq -r '.db_password' "$CONFIG_FILE")
+  MONGO_PORT=$(jq -r '.mongo_port' "$CONFIG_FILE")
+  
   if command -v mongosh &> /dev/null; then
-    # Use mongosh to check SSL status if available
-    if sudo mongosh --eval "db.adminCommand({ getParameter: 1, sslMode: 1 })" | grep -q "requireSSL"; then
-      echo "✅ MongoDB SSL mode verified: requireSSL is active"
+    # Try with domain name first (if not localhost)
+    if [ "$DOMAIN" != "localhost" ]; then
+      echo "Attempting to verify TLS using domain name: $DOMAIN"
+      if sudo mongosh --host $DOMAIN --port $MONGO_PORT --tls -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval "db.adminCommand({ getParameter: 1, tlsMode: 1 })" 2>/dev/null | grep -q "requireTLS"; then
+        echo "✅ MongoDB TLS mode verified using domain name: requireTLS is active"
+      else
+        echo "Verification using domain name failed. Trying localhost..."
+        # If that fails, try with localhost
+        if sudo mongosh --host localhost --port $MONGO_PORT --tls -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval "db.adminCommand({ getParameter: 1, tlsMode: 1 })" 2>/dev/null | grep -q "requireTLS"; then
+          echo "✅ MongoDB TLS mode verified using localhost: requireTLS is active"
+        else
+          echo "⚠️ WARNING: MongoDB is running but TLS mode could not be verified."
+          echo "Please check manually with:"
+          echo "mongosh --host $DOMAIN --port $MONGO_PORT --tls -u $DB_USERNAME -p <password> --authenticationDatabase admin --eval \"db.adminCommand({ getParameter: 1, tlsMode: 1 })\""
+          echo "or"
+          echo "mongosh --host localhost --port $MONGO_PORT --tls -u $DB_USERNAME -p <password> --authenticationDatabase admin --eval \"db.adminCommand({ getParameter: 1, tlsMode: 1 })\""
+        fi
+      fi
     else
-      echo "⚠️ WARNING: MongoDB is running but SSL mode could not be verified."
-      echo "Please check manually with: mongosh --eval \"db.adminCommand({ getParameter: 1, sslMode: 1 })\""
+      # Just try localhost
+      echo "Attempting to verify TLS using localhost"
+      if sudo mongosh --host localhost --port $MONGO_PORT --tls -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval "db.adminCommand({ getParameter: 1, tlsMode: 1 })" 2>/dev/null | grep -q "requireTLS"; then
+        echo "✅ MongoDB TLS mode verified using localhost: requireTLS is active"
+      else
+        echo "⚠️ WARNING: MongoDB is running but TLS mode could not be verified."
+        echo "Please check manually with:"
+        echo "mongosh --host localhost --port $MONGO_PORT --tls -u $DB_USERNAME -p <password> --authenticationDatabase admin --eval \"db.adminCommand({ getParameter: 1, tlsMode: 1 })\""
+      fi
     fi
   else
-    echo "⚠️ mongosh not available to verify SSL configuration."
-    echo "MongoDB is running, but please verify SSL configuration manually."
+    echo "⚠️ mongosh not available to verify TLS configuration."
+    echo "MongoDB is running, but please verify TLS configuration manually."
   fi
 else
   echo "❌ ERROR: MongoDB failed to restart. Check logs with: sudo journalctl -u mongod"
   exit 1
 fi
 
-echo "✅ SSL provisioning and MongoDB configuration complete for $DOMAIN"
-echo "MongoDB is now configured to use SSL with the certificate at $SSL_PEM_PATH"
-echo "Clients will need to connect using SSL/TLS"
+echo "✅ TLS provisioning and MongoDB configuration complete for $DOMAIN"
+echo "MongoDB is now configured to use TLS with the certificate at $SSL_PEM_PATH"
+echo "Clients will need to connect using TLS"
