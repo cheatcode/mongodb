@@ -78,7 +78,7 @@ if [ ! -f "$MONGO_KEYFILE" ]; then
   chown mongodb:mongodb "$MONGO_KEYFILE"
 fi
 
-# NOTE: First create a MongoDB config without authentication
+# NOTE: First create a MongoDB config without authentication and without replication
 cat <<EOF | sudo tee $MONGO_CONF
 storage:
   dbPath: /var/lib/mongodb
@@ -89,9 +89,10 @@ systemLog:
 net:
   port: $MONGO_PORT
   bindIp: 127.0.0.1
-replication:
-  replSetName: $REPLICA_SET
 EOF
+
+# Store the replica set name for provision_ssl.sh to use later
+echo "$REPLICA_SET" > /tmp/mongodb_replica_set
 
 sudo systemctl enable mongod
 sudo systemctl start mongod
@@ -117,7 +118,7 @@ else
   exit 1
 fi
 
-# NOTE: Now update the config to enable authentication
+# NOTE: Now update the config to enable authentication (without replication)
 echo "Enabling authentication in MongoDB configuration..."
 cat <<EOF | sudo tee $MONGO_CONF
 storage:
@@ -132,8 +133,6 @@ net:
 security:
   authorization: enabled
   keyFile: $MONGO_KEYFILE
-replication:
-  replSetName: $REPLICA_SET
 EOF
 
 # Restart MongoDB with authentication enabled

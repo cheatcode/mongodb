@@ -25,8 +25,17 @@ if [ ! -f "$CA_FILE" ]; then
   exit 1
 fi
 
-# Update MongoDB configuration to use TLS
-echo "Updating MongoDB configuration to use TLS..."
+# Check for the replica set name file created by bootstrap.sh
+if [ -f "/tmp/mongodb_replica_set" ]; then
+  REPLICA_SET=$(cat /tmp/mongodb_replica_set)
+  echo "Found replica set name: $REPLICA_SET"
+else
+  echo "⚠️ WARNING: Replica set name file not found. Using default name 'rs0'."
+  REPLICA_SET="rs0"
+fi
+
+# Update MongoDB configuration to use TLS and add replication
+echo "Updating MongoDB configuration to use TLS and add replication..."
 if [ -f "$MONGO_CONF" ]; then
   # Backup the current MongoDB configuration
   BACKUP_FILE="${MONGO_CONF}.bak.$(date +%Y%m%d%H%M%S)"
@@ -71,6 +80,15 @@ if [ -f "$MONGO_CONF" ]; then
       echo "Removing deprecated SSL configuration..."
       sudo sed -i '/ssl:/,/[a-z]/ d' "$MONGO_CONF"
     fi
+  fi
+  
+  # Add or update replication section
+  if grep -q "replication:" "$MONGO_CONF"; then
+    echo "Updating existing replication configuration..."
+    sudo sed -i '/replication:/,/[a-z]/ s|replSetName:.*|replSetName: '"$REPLICA_SET"'|' "$MONGO_CONF"
+  else
+    echo "Adding replication configuration..."
+    echo -e "\nreplication:\n  replSetName: $REPLICA_SET" | sudo tee -a "$MONGO_CONF"
   fi
 else
   echo "❌ ERROR: MongoDB configuration file not found at $MONGO_CONF"
@@ -147,9 +165,17 @@ echo "Checking if this is a primary or secondary node..."
 IS_PRIMARY=false
 IS_INITIALIZED=false
 
+# Check for the replica set name file created by bootstrap.sh
+if [ -f "/tmp/mongodb_replica_set" ]; then
+  REPLICA_SET=$(cat /tmp/mongodb_replica_set)
+  echo "Found replica set name: $REPLICA_SET"
+else
+  echo "⚠️ WARNING: Replica set name file not found. Using default name 'rs0'."
+  REPLICA_SET="rs0"
+fi
+
 # Check for the primary role flag file created by bootstrap.sh
 if [ -f "/tmp/mongodb_primary_role" ]; then
-  REPLICA_SET=$(cat /tmp/mongodb_primary_role)
   IS_PRIMARY=true
   echo "This node was set up as a primary for replica set: $REPLICA_SET"
 fi

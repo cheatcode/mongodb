@@ -55,6 +55,20 @@ sudo systemctl daemon-reload
 echo "Removing msmtp config..."
 sudo rm -f /etc/msmtprc
 
+echo "Removing temporary files..."
+sudo rm -f /tmp/mongodb_primary_role
+sudo rm -f /tmp/mongodb_status
+sudo rm -rf /tmp/monitor_logs
+sudo rm -f /tmp/mongo-backup-*.gz
+
+echo "Removing cron jobs..."
+sudo rm -f /etc/cron.d/mongo-backup
+sudo rm -f /etc/cron.d/mongo-health-check
+sudo rm -f /etc/cron.d/certbot-renew
+
+echo "Removing MongoDB backup logs..."
+sudo rm -rf /var/log/mongodb-backup
+
 echo "Cleaning up apt..."
 sudo apt autoremove -y
 sudo apt clean
