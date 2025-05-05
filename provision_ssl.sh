@@ -178,12 +178,12 @@ if [ -f "$CONFIG_FILE" ]; then
   fi
   
   # Check if the node is already initialized (part of a replica set)
-  if mongosh --host localhost --port $MONGO_PORT --quiet --eval "JSON.stringify(rs.status())" 2>/dev/null | grep -q '"ok":1'; then
+  if mongosh --host localhost --port $MONGO_PORT -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "JSON.stringify(rs.status())" 2>/dev/null | grep -q '"ok":1'; then
     IS_INITIALIZED=true
     echo "This node is already initialized as part of a replica set."
     
     # Now check if it's primary
-    if mongosh --host localhost --port $MONGO_PORT --quiet --eval "JSON.stringify(rs.isMaster())" 2>/dev/null | grep -q '"ismaster":true'; then
+    if mongosh --host localhost --port $MONGO_PORT -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "JSON.stringify(rs.isMaster())" 2>/dev/null | grep -q '"ismaster":true'; then
       IS_PRIMARY=true
       echo "This node is the primary."
     else

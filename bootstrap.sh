@@ -78,7 +78,7 @@ if [ ! -f "$MONGO_KEYFILE" ]; then
   chown mongodb:mongodb "$MONGO_KEYFILE"
 fi
 
-# NOTE: Update mongod.conf.
+# NOTE: First create a MongoDB config without authentication
 cat <<EOF | sudo tee $MONGO_CONF
 storage:
   dbPath: /var/lib/mongodb
@@ -89,9 +89,6 @@ systemLog:
 net:
   port: $MONGO_PORT
   bindIp: 127.0.0.1
-security:
-  authorization: enabled
-  keyFile: $MONGO_KEYFILE
 replication:
   replSetName: $REPLICA_SET
 EOF
@@ -112,7 +109,46 @@ if [ "$ROLE" == "primary" ]; then
 fi
 
 # NOTE: Create admin user.
-mongosh --port $MONGO_PORT --eval "db.getSiblingDB('admin').createUser({ user: '$DB_USERNAME', pwd: '$DB_PASSWORD', roles: [ { role: 'root', db: 'admin' } ] })" || echo "Admin user may already exist."
+echo "Creating admin user..."
+if mongosh --port $MONGO_PORT --eval "db.getSiblingDB('admin').createUser({ user: '$DB_USERNAME', pwd: '$DB_PASSWORD', roles: [ { role: 'root', db: 'admin' } ] })"; then
+  echo "✅ Admin user created successfully"
+else
+  echo "❌ Failed to create admin user"
+  exit 1
+fi
+
+# NOTE: Now update the config to enable authentication
+echo "Enabling authentication in MongoDB configuration..."
+cat <<EOF | sudo tee $MONGO_CONF
+storage:
+  dbPath: /var/lib/mongodb
+systemLog:
+  destination: file
+  path: $LOG_FILE
+  logAppend: true
+net:
+  port: $MONGO_PORT
+  bindIp: 127.0.0.1
+security:
+  authorization: enabled
+  keyFile: $MONGO_KEYFILE
+replication:
+  replSetName: $REPLICA_SET
+EOF
+
+# Restart MongoDB with authentication enabled
+echo "Restarting MongoDB with authentication enabled..."
+sudo systemctl restart mongod
+sleep 5
+
+# Verify we can connect with authentication
+echo "Verifying authentication..."
+if mongosh --port $MONGO_PORT -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval "db.adminCommand('ping')"; then
+  echo "✅ Authentication working correctly"
+else
+  echo "❌ Authentication verification failed"
+  exit 1
+fi
 
 # NOTE: Setup log rotation.
 cat <<EOF | sudo tee /etc/logrotate.d/mongod
