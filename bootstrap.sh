@@ -176,14 +176,17 @@ if ! systemctl is-active --quiet mongod; then
 fi
 
 # Check if MongoDB TLS is configured
+CERT_FILE="/etc/ssl/mongodb/certificate.pem"
+CA_FILE="/etc/ssl/mongodb/certificate_authority.pem"
 TLS_ENABLED=false
 TLS_ARG=""
-if grep -q "tls:" /etc/mongod.conf && grep -q "mode: requireTLS" /etc/mongod.conf; then
-  log "MongoDB TLS is enabled. Using TLS connection for backup..."
+
+if [ -f "$CERT_FILE" ] && grep -q "tls:" /etc/mongod.conf && grep -q "mode: requireTLS" /etc/mongod.conf; then
+  log "MongoDB TLS is enabled with private CA certificates. Using TLS connection for backup..."
   TLS_ENABLED=true
   TLS_ARG="--ssl"
 elif grep -q "ssl:" /etc/mongod.conf && grep -q "mode: requireSSL" /etc/mongod.conf; then
-  log "MongoDB SSL is enabled. Using SSL connection for backup..."
+  log "MongoDB SSL is enabled (legacy configuration). Using SSL connection for backup..."
   TLS_ENABLED=true
   TLS_ARG="--ssl"
 else
@@ -270,5 +273,8 @@ sudo ufw --force enable             # enable/reload firewall
 
 echo "✅ MongoDB $ROLE node bootstrap complete on $DOMAIN."
 echo "Next steps:"
-echo "1. Run ./provision_ssl.sh $DOMAIN to provision SSL and update MongoDB config."
-echo "2. Run ./monitoring.sh $DOMAIN to set up monitoring and alerts."
+echo "1. Place your private CA certificates at:"
+echo "   - /etc/ssl/mongodb/certificate.pem"
+echo "   - /etc/ssl/mongodb/certificate_authority.pem"
+echo "2. Run ./provision_ssl.sh to configure MongoDB to use the certificates."
+echo "3. Run ./monitoring.sh $DOMAIN to set up monitoring and alerts."

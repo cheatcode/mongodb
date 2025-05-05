@@ -25,12 +25,13 @@ if ! systemctl is-active --quiet mongod; then
 fi
 
 # Check if TLS is provisioned
-SSL_PEM_PATH="/etc/ssl/mongodb.pem"
+CERT_FILE="/etc/ssl/mongodb/certificate.pem"
+CA_FILE="/etc/ssl/mongodb/certificate_authority.pem"
 TLS_ENABLED=false
-if [ -f "$SSL_PEM_PATH" ] && grep -q "tls:" /etc/mongod.conf && grep -q "mode: requireTLS" /etc/mongod.conf; then
+if [ -f "$CERT_FILE" ] && grep -q "tls:" /etc/mongod.conf && grep -q "mode: requireTLS" /etc/mongod.conf; then
   TLS_ENABLED=true
   TLS_ARGS="--tls"
-elif [ -f "$SSL_PEM_PATH" ] && grep -q "ssl:" /etc/mongod.conf && grep -q "mode: requireSSL" /etc/mongod.conf; then
+elif grep -q "ssl:" /etc/mongod.conf && grep -q "mode: requireSSL" /etc/mongod.conf; then
   # For backward compatibility with older configurations
   TLS_ENABLED=true
   TLS_ARGS="--ssl"

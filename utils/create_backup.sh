@@ -67,12 +67,15 @@ create_backup() {
 }
 
 # Check if MongoDB TLS/SSL is configured
+CERT_FILE="/etc/ssl/mongodb/certificate.pem"
+CA_FILE="/etc/ssl/mongodb/certificate_authority.pem"
 TLS_ENABLED=false
-if grep -q "tls:" /etc/mongod.conf && grep -q "mode: requireTLS" /etc/mongod.conf; then
-  echo "MongoDB TLS is enabled."
+
+if [ -f "$CERT_FILE" ] && grep -q "tls:" /etc/mongod.conf && grep -q "mode: requireTLS" /etc/mongod.conf; then
+  echo "MongoDB TLS is enabled with private CA certificates."
   TLS_ENABLED=true
 elif grep -q "ssl:" /etc/mongod.conf && grep -q "mode: requireSSL" /etc/mongod.conf; then
-  echo "MongoDB SSL is enabled."
+  echo "MongoDB SSL is enabled (legacy configuration)."
   TLS_ENABLED=true
 else
   echo "MongoDB TLS/SSL is not enabled. Using standard connection..."

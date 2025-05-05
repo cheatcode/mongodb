@@ -1,6 +1,6 @@
 # MongoDB Deployment with TLS and Monitoring
 
-> **⚠️ Security Notice**: This deployment uses Let's Encrypt certificates with `allowInvalidCertificates: true` and `allowInvalidHostnames: true` in the MongoDB configuration to simplify inter-node communication in replica sets. While this reduces certificate validation security, the deployment remains secure through strong authentication, custom port usage, and firewall rules. Always use strong passwords and restrict network access for production deployments.
+> **⚠️ Security Notice**: This deployment uses private CA certificates for enhanced security in MongoDB configuration. The deployment is secured through strong authentication, custom port usage, and firewall rules. Always use strong passwords and restrict network access for production deployments.
 
 This repository contains a comprehensive set of scripts for deploying, securing, and monitoring MongoDB instances. The scripts are designed to be modular, allowing you to set up MongoDB with proper security, TLS encryption, and monitoring capabilities.
 
@@ -37,7 +37,7 @@ Before you begin, ensure you have:
 3. **A domain name** pointing to your server's IP address (for SSL certificates)
 4. **Open ports**:
    - 22 (SSH)
-   - 80 (HTTP - needed for Let's Encrypt verification)
+   - 80 (HTTP)
    - 443 (HTTPS)
    - The port you specify for MongoDB in config.json (e.g., 27017, 2610, etc.)
 5. **AWS account** (if you plan to use S3 for backups)
@@ -146,23 +146,31 @@ The bootstrap script installs MongoDB, configures it with proper security settin
 
 ## Step 2: Provision TLS Certificates
 
-The provision_ssl script obtains SSL certificates from Let's Encrypt and configures MongoDB to use TLS.
+The provision_ssl script configures MongoDB to use pre-generated private CA certificates for enhanced security.
 
-1. **Run the TLS provisioning script**:
+1. **Place your private CA certificates in the required locations**:
 
    ```bash
-   ./provision_ssl.sh your-domain.com
+   sudo mkdir -p /etc/ssl/mongodb
+   sudo cp /path/to/your/certificate.pem /etc/ssl/mongodb/certificate.pem
+   sudo cp /path/to/your/ca_certificate.pem /etc/ssl/mongodb/certificate_authority.pem
+   sudo chmod 600 /etc/ssl/mongodb/certificate.pem
+   sudo chmod 600 /etc/ssl/mongodb/certificate_authority.pem
+   sudo chown mongodb:mongodb /etc/ssl/mongodb/certificate.pem
+   sudo chown mongodb:mongodb /etc/ssl/mongodb/certificate_authority.pem
    ```
 
-   Parameter:
-   - `your-domain.com`: Your server's domain name
+   Replace `/path/to/your/certificate.pem` and `/path/to/your/ca_certificate.pem` with the actual paths to your certificate files.
 
-2. **What the provision_ssl script does**:
-   - Installs certbot if not already installed
-   - Obtains SSL certificates from Let's Encrypt
-   - Concatenates the certificate files into a single PEM file for MongoDB
+2. **Run the TLS provisioning script**:
+
+   ```bash
+   ./provision_ssl.sh
+   ```
+
+3. **What the provision_ssl script does**:
+   - Checks for the existence of the certificate files
    - Updates the MongoDB configuration to use TLS with proper settings
-   - Sets up automatic certificate renewal with a hook to update MongoDB
    - Configures MongoDB to allow connections from outside the server (bindIp: 0.0.0.0)
    - Restarts MongoDB with the new TLS configuration
 
@@ -236,7 +244,18 @@ If you're setting up a replica set with multiple nodes, you'll need to add secon
    ```bash
    # On secondary node
    ./bootstrap.sh secondary rs0 secondary-node-domain.com
-   ./provision_ssl.sh secondary-node-domain.com
+   
+   # Place your private CA certificates in the required locations
+   sudo mkdir -p /etc/ssl/mongodb
+   sudo cp /path/to/your/certificate.pem /etc/ssl/mongodb/certificate.pem
+   sudo cp /path/to/your/ca_certificate.pem /etc/ssl/mongodb/certificate_authority.pem
+   sudo chmod 600 /etc/ssl/mongodb/certificate.pem
+   sudo chmod 600 /etc/ssl/mongodb/certificate_authority.pem
+   sudo chown mongodb:mongodb /etc/ssl/mongodb/certificate.pem
+   sudo chown mongodb:mongodb /etc/ssl/mongodb/certificate_authority.pem
+   
+   # Configure TLS and set up monitoring
+   ./provision_ssl.sh
    ./monitoring.sh secondary-node-domain.com
    ```
 
@@ -378,10 +397,10 @@ If you encounter issues during the setup process, here are some common troublesh
    sudo systemctl status mongod
    ```
 
-3. **Check SSL certificate status**:
+3. **Check SSL certificate files**:
 
    ```bash
-   sudo certbot certificates
+   ls -la /etc/ssl/mongodb/
    ```
 
 4. **Test MongoDB connection with TLS**:

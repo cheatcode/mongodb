@@ -203,17 +203,14 @@ server {
   }
 }
 
-# For HTTPS (if Let's Encrypt is set up)
-server {
-  listen 443 ssl;
-  server_name $DOMAIN;
-  
-  # These SSL settings will be ignored if the certificate files don't exist
-  ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
-  ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
-  
-  # Only include this server block if the certificate exists
-  include_if_exists /etc/letsencrypt/options-ssl-nginx.conf;
+  # For HTTPS (if private CA certificates are set up)
+  server {
+    listen 443 ssl;
+    server_name $DOMAIN;
+    
+    # These SSL settings will be ignored if the certificate files don't exist
+    ssl_certificate /etc/ssl/mongodb/certificate_authority.pem;
+    ssl_certificate_key /etc/ssl/mongodb/certificate.pem;
   
   location = /monitor {
     fastcgi_pass unix:/var/run/fcgiwrap.socket;
@@ -228,7 +225,7 @@ if ! nginx -t 2>/dev/null; then
   echo "Detected older nginx version without include_if_exists support. Adjusting configuration..."
   
   # Check if SSL certificates exist
-  if [ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ] && [ -f "/etc/letsencrypt/live/$DOMAIN/privkey.pem" ]; then
+  if [ -f "/etc/ssl/mongodb/certificate_authority.pem" ] && [ -f "/etc/ssl/mongodb/certificate.pem" ]; then
     # Create a configuration with both HTTP and HTTPS
     cat <<EOF | sudo tee /etc/nginx/conf.d/monitor.conf
 # For HTTP
@@ -248,8 +245,8 @@ server {
   listen 443 ssl;
   server_name $DOMAIN;
   
-  ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
-  ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
+  ssl_certificate /etc/ssl/mongodb/certificate_authority.pem;
+  ssl_certificate_key /etc/ssl/mongodb/certificate.pem;
   
   location = /monitor {
     fastcgi_pass unix:/var/run/fcgiwrap.socket;

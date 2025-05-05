@@ -34,6 +34,9 @@ echo "Removing certbot..."
 sudo apt purge -y certbot python3-certbot-nginx
 sudo rm -rf /etc/letsencrypt
 
+echo "Removing MongoDB SSL certificates..."
+sudo rm -rf /etc/ssl/mongodb
+
 echo "Removing fcgiwrap..."
 sudo apt purge -y fcgiwrap
 

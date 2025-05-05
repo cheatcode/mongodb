@@ -37,7 +37,8 @@ aws s3 cp s3://$AWS_BUCKET/$DOMAIN/$BACKUP_FILE $TMP_PATH --region $AWS_REGION
 
 echo "Restoring backup..."
 # Check if MongoDB TLS is configured
-SSL_PEM_PATH="/etc/ssl/mongodb.pem"
+CERT_FILE="/etc/ssl/mongodb/certificate.pem"
+CA_FILE="/etc/ssl/mongodb/certificate_authority.pem"
 
 # Function to restore backup with fallback to localhost
 restore_backup() {
@@ -72,11 +73,11 @@ restore_backup() {
 
 # Check if MongoDB TLS/SSL is configured
 TLS_ENABLED=false
-if grep -q "tls:" /etc/mongod.conf && grep -q "mode: requireTLS" /etc/mongod.conf; then
-  echo "MongoDB TLS is enabled."
+if [ -f "$CERT_FILE" ] && grep -q "tls:" /etc/mongod.conf && grep -q "mode: requireTLS" /etc/mongod.conf; then
+  echo "MongoDB TLS is enabled with private CA certificates."
   TLS_ENABLED=true
 elif grep -q "ssl:" /etc/mongod.conf && grep -q "mode: requireSSL" /etc/mongod.conf; then
-  echo "MongoDB SSL is enabled."
+  echo "MongoDB SSL is enabled (legacy configuration)."
   TLS_ENABLED=true
 else
   echo "MongoDB TLS/SSL is not enabled. Using standard connection..."

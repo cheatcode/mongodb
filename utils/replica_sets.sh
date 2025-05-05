@@ -15,11 +15,12 @@ DB_USERNAME=$(jq -r '.db_username' "$CONFIG_FILE")
 DB_PASSWORD=$(jq -r '.db_password' "$CONFIG_FILE")
 
 # Check if MongoDB TLS is configured
-SSL_PEM_PATH="/etc/ssl/mongodb.pem"
+CERT_FILE="/etc/ssl/mongodb/certificate.pem"
+CA_FILE="/etc/ssl/mongodb/certificate_authority.pem"
 MONGO_PORT=$(jq -r '.mongo_port' "$CONFIG_FILE")
 TLS_ARGS=""
 
-if grep -q "tls:" /etc/mongod.conf && grep -q "mode: requireTLS" /etc/mongod.conf; then
+if [ -f "$CERT_FILE" ] && grep -q "tls:" /etc/mongod.conf && grep -q "mode: requireTLS" /etc/mongod.conf; then
   echo "MongoDB TLS is enabled. Using TLS connection..."
   TLS_ARGS="--tls"
 elif grep -q "ssl:" /etc/mongod.conf && grep -q "mode: requireSSL" /etc/mongod.conf; then
