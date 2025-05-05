@@ -259,6 +259,8 @@ If you're setting up a replica set with multiple nodes, you'll need to add secon
    ./monitoring.sh secondary-node-domain.com
    ```
 
+   The `provision_ssl.sh` script will automatically get the domain name from your config.json file and use it to configure the replica set.
+
 2. **Add secondary nodes to the replica set**:
 
    From the primary node, use the replica_sets.sh utility script:
