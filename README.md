@@ -339,7 +339,22 @@ The bootstrap script sets up automatic backups to S3 for the primary node. You c
    ./utils/list_backups.sh
    ```
 
-2. **Restore from a backup**:
+2. **Create a manual backup**:
+
+   ```bash
+   ./utils/create_backup.sh [prefix]
+   ```
+
+   The optional `prefix` parameter allows you to add a custom prefix to the backup filename (default is "manual").
+   
+   Example:
+   ```bash
+   ./utils/create_backup.sh pre-update
+   ```
+   
+   This will create a backup with a filename like `pre-update-20250504-193245.gz`.
+
+3. **Restore from a backup**:
 
    ```bash
    ./utils/restore_backup.sh backup-filename.gz
