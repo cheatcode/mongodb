@@ -106,11 +106,6 @@ sleep 10
 # instead of localhost. This avoids having to update the replica set configuration later.
 HOSTNAME=$(hostname -f)
 
-# Skip replica set initialization here - it will be done in provision_ssl.sh
-# if [ "$ROLE" == "primary" ]; then
-#   mongosh --port $MONGO_PORT --eval "rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'localhost:$MONGO_PORT' }]})"
-# fi
-
 # Create a flag file to indicate this is a primary node (for provision_ssl.sh)
 if [ "$ROLE" == "primary" ]; then
   echo "$REPLICA_SET" > /tmp/mongodb_primary_role
