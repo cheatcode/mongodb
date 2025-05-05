@@ -142,6 +142,18 @@ aws configure set region $AWS_REGION
 if [ "$ROLE" == "primary" ]; then
   cat <<EOF | sudo tee $BACKUP_SCRIPT
 #!/bin/bash
+
+# Set up logging
+LOG_DIR="/var/log/mongodb-backup"
+mkdir -p \$LOG_DIR
+LOG_FILE="\$LOG_DIR/backup-\$(date +%F).log"
+
+log() {
+  echo "\$(date +"%Y-%m-%d %H:%M:%S") - \$1" | tee -a \$LOG_FILE
+}
+
+log "Starting MongoDB backup process"
+
 TIMESTAMP=\$(date +%F-%H-%M)
 BACKUP_PATH="/tmp/mongo-backup-\$TIMESTAMP.gz"
 
@@ -149,36 +161,91 @@ BACKUP_PATH="/tmp/mongo-backup-\$TIMESTAMP.gz"
 DOMAIN_CONFIG=\$(jq -r '.domain_name' "$CONFIG_FILE")
 if [ -n "\$DOMAIN_CONFIG" ] && [ "\$DOMAIN_CONFIG" != "null" ] && [ "\$DOMAIN_CONFIG" != "your.domain.com" ]; then
   HOSTNAME="\$DOMAIN_CONFIG"
-  echo "Using domain name from config.json: \$HOSTNAME"
+  log "Using domain name from config.json: \$HOSTNAME"
 else
   HOSTNAME=\$(hostname -f)
-  echo "Domain name not set in config.json. Using hostname: \$HOSTNAME"
+  log "Domain name not set in config.json. Using hostname: \$HOSTNAME"
+fi
+
+# Check if MongoDB is running
+if ! systemctl is-active --quiet mongod; then
+  log "❌ ERROR: MongoDB is not running. Backup aborted."
+  exit 1
 fi
 
 # Check if MongoDB TLS is configured
-SSL_PEM_PATH="/etc/ssl/mongodb.pem"
+TLS_ENABLED=false
+TLS_ARG=""
 if grep -q "tls:" /etc/mongod.conf && grep -q "mode: requireTLS" /etc/mongod.conf; then
-  echo "MongoDB TLS is enabled. Using TLS connection for backup..."
-  mongodump --host \$HOSTNAME --port $MONGO_PORT --tls -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --archive=\$BACKUP_PATH --gzip
+  log "MongoDB TLS is enabled. Using TLS connection for backup..."
+  TLS_ENABLED=true
+  TLS_ARG="--ssl"
 elif grep -q "ssl:" /etc/mongod.conf && grep -q "mode: requireSSL" /etc/mongod.conf; then
-  echo "MongoDB SSL is enabled. Using SSL connection for backup..."
-  mongodump --host \$HOSTNAME --port $MONGO_PORT --ssl -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --archive=\$BACKUP_PATH --gzip
+  log "MongoDB SSL is enabled. Using SSL connection for backup..."
+  TLS_ENABLED=true
+  TLS_ARG="--ssl"
 else
-  echo "MongoDB TLS is not enabled. Using standard connection for backup..."
-  mongodump --host \$HOSTNAME --port $MONGO_PORT -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --archive=\$BACKUP_PATH --gzip
+  log "MongoDB TLS is not enabled. Using standard connection for backup..."
 fi
 
-aws s3 cp \$BACKUP_PATH s3://$AWS_BUCKET/\$HOSTNAME/\$TIMESTAMP.gz --region $AWS_REGION
-rm \$BACKUP_PATH
-BACKUPS=\$(aws s3 ls s3://$AWS_BUCKET/\$HOSTNAME/ --region $AWS_REGION | awk '{print \$4}' | sort)
-BACKUP_COUNT=\$(echo "\$BACKUPS" | wc -l)
-if [ \$BACKUP_COUNT -gt 10 ]; then
-  DELETE_COUNT=\$((BACKUP_COUNT - 10))
-  OLD_BACKUPS=\$(echo "\$BACKUPS" | head -n \$DELETE_COUNT)
-  for FILE in \$OLD_BACKUPS; do
-    aws s3 rm s3://$AWS_BUCKET/\$HOSTNAME/\$FILE --region $AWS_REGION
-  done
+# Check if MongoDB is responsive
+if ! mongosh --host \$HOSTNAME --port $MONGO_PORT \$TLS_ARG -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval "db.adminCommand('ping')" &>/dev/null; then
+  log "❌ ERROR: MongoDB is not responsive. Backup aborted."
+  exit 1
 fi
+
+# Create backup
+log "Creating backup at \$BACKUP_PATH"
+if mongodump --host \$HOSTNAME --port $MONGO_PORT \$TLS_ARG -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --archive=\$BACKUP_PATH --gzip; then
+  log "✅ Backup created successfully"
+  
+  # Check if backup file exists and has a size greater than 0
+  if [ -f "\$BACKUP_PATH" ] && [ \$(stat -c%s "\$BACKUP_PATH") -gt 0 ]; then
+    log "Backup file exists and has size: \$(stat -c%s "\$BACKUP_PATH") bytes"
+    
+    # Upload to S3
+    log "Uploading backup to S3..."
+    if aws s3 cp \$BACKUP_PATH s3://$AWS_BUCKET/\$HOSTNAME/\$TIMESTAMP.gz --region $AWS_REGION; then
+      log "✅ Backup uploaded to S3 successfully"
+      
+      # Clean up local backup
+      rm \$BACKUP_PATH
+      log "Local backup file removed"
+      
+      # Manage retention (keep only the 10 most recent backups)
+      log "Managing backup retention..."
+      BACKUPS=\$(aws s3 ls s3://$AWS_BUCKET/\$HOSTNAME/ --region $AWS_REGION | awk '{print \$4}' | sort)
+      BACKUP_COUNT=\$(echo "\$BACKUPS" | wc -l)
+      
+      if [ \$BACKUP_COUNT -gt 10 ]; then
+        DELETE_COUNT=\$((BACKUP_COUNT - 10))
+        OLD_BACKUPS=\$(echo "\$BACKUPS" | head -n \$DELETE_COUNT)
+        
+        log "Keeping 10 most recent backups, deleting \$DELETE_COUNT older backups"
+        for FILE in \$OLD_BACKUPS; do
+          if aws s3 rm s3://$AWS_BUCKET/\$HOSTNAME/\$FILE --region $AWS_REGION; then
+            log "Deleted old backup: \$FILE"
+          else
+            log "Failed to delete old backup: \$FILE"
+          fi
+        done
+      else
+        log "Only \$BACKUP_COUNT backups exist, no cleanup needed"
+      fi
+    else
+      log "❌ ERROR: Failed to upload backup to S3"
+      exit 1
+    fi
+  else
+    log "❌ ERROR: Backup file is missing or empty (\$(stat -c%s "\$BACKUP_PATH") bytes). Backup may be corrupted."
+    exit 1
+  fi
+else
+  log "❌ ERROR: Failed to create backup"
+  exit 1
+fi
+
+log "Backup process completed successfully"
 EOF
   chmod +x $BACKUP_SCRIPT
   echo "0 2 * * * root $BACKUP_SCRIPT" | sudo tee /etc/cron.d/mongo-backup
