@@ -131,22 +131,57 @@ fi
 echo "Creating monitoring endpoint script..."
 cat <<EOF | sudo tee /usr/local/bin/mongo_monitor.sh
 #!/bin/bash
-read QUERY_STRING
-TOKEN_VALUE=\$(echo \$QUERY_STRING | sed -n 's/.*token=\\([^&]*\\).*/\\1/p')
-if [ "\$TOKEN_VALUE" != "$MONITOR_TOKEN" ]; then
-  echo -e "HTTP/1.1 403 Forbidden\\n"
-  echo "Forbidden"
+
+# Set up logging
+mkdir -p /tmp/monitor_logs
+chmod 777 /tmp/monitor_logs
+DEBUG_LOG="/tmp/monitor_logs/monitor_debug.log"
+echo "=== Script executed at \$(date) ===" >> \$DEBUG_LOG
+
+# Dump all environment variables for debugging
+env > /tmp/monitor_logs/env.log
+
+# Output headers
+echo "Content-type: text/plain"
+echo ""
+
+# Log key environment variables
+echo "QUERY_STRING=\${QUERY_STRING}" >> \$DEBUG_LOG
+echo "REQUEST_URI=\${REQUEST_URI}" >> \$DEBUG_LOG
+echo "REQUEST_METHOD=\${REQUEST_METHOD}" >> \$DEBUG_LOG
+echo "REMOTE_ADDR=\${REMOTE_ADDR}" >> \$DEBUG_LOG
+
+# Expected token
+EXPECTED_TOKEN="$MONITOR_TOKEN"
+
+# Simple token extraction - just use the raw QUERY_STRING
+if [ -z "\$QUERY_STRING" ]; then
+  echo "No query string provided" >> \$DEBUG_LOG
+  echo "Forbidden: No query string"
   exit 0
 fi
-MEM=\$(free -m | awk '/Mem:/ {print \$3"/"\$2" MB"}')
-CPU=\$(top -bn1 | grep "Cpu(s)" | awk '{print \$2 + \$4 "%"}')
-DISK=\$(df -h / | awk 'NR==2 {print \$3"/"\$2}')
-MONGO_STATUS=\$(systemctl is-active mongod)
-echo -e "HTTP/1.1 200 OK\\n"
-echo "Status: MongoDB $MONGO_STATUS"
-echo "Memory: \$MEM"
-echo "CPU: \$CPU"
-echo "Disk: \$DISK"
+
+echo "Raw query string: \$QUERY_STRING" >> \$DEBUG_LOG
+
+# Check if token is in the query string
+if [[ "\$QUERY_STRING" == "token=\$EXPECTED_TOKEN" ]]; then
+  echo "Token validation successful" >> \$DEBUG_LOG
+  
+  # Get system stats
+  MEM=\$(free -m | awk '/Mem:/ {print \$3"/"\$2" MB"}')
+  CPU=\$(top -bn1 | grep "Cpu(s)" | awk '{print \$2 + \$4 "%"}')
+  DISK=\$(df -h / | awk 'NR==2 {print \$3"/"\$2}')
+  MONGO_STATUS=\$(systemctl is-active mongod)
+
+  # Output stats
+  echo "Status: MongoDB \$MONGO_STATUS"
+  echo "Memory: \$MEM"
+  echo "CPU: \$CPU"
+  echo "Disk: \$DISK"
+else
+  echo "Token validation failed. Got '\$QUERY_STRING', expected 'token=\$EXPECTED_TOKEN'" >> \$DEBUG_LOG
+  echo "Forbidden: Invalid token"
+fi
 EOF
 
 sudo chmod +x /usr/local/bin/mongo_monitor.sh
@@ -154,17 +189,91 @@ sudo chmod +x /usr/local/bin/mongo_monitor.sh
 # NOTE: Configure nginx for the monitor endpoint
 echo "Configuring nginx for the monitoring endpoint..."
 cat <<EOF | sudo tee /etc/nginx/conf.d/monitor.conf
+# This configuration adds the /monitor endpoint to both HTTP and HTTPS servers
+
+# For HTTP
 server {
   listen 80;
   server_name $DOMAIN;
 
-  location /monitor {
+  location = /monitor {
+    fastcgi_pass unix:/var/run/fcgiwrap.socket;
+    include fastcgi_params;
+    fastcgi_param SCRIPT_FILENAME /usr/local/bin/mongo_monitor.sh;
+  }
+}
+
+# For HTTPS (if Let's Encrypt is set up)
+server {
+  listen 443 ssl;
+  server_name $DOMAIN;
+  
+  # These SSL settings will be ignored if the certificate files don't exist
+  ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
+  
+  # Only include this server block if the certificate exists
+  include_if_exists /etc/letsencrypt/options-ssl-nginx.conf;
+  
+  location = /monitor {
     fastcgi_pass unix:/var/run/fcgiwrap.socket;
     include fastcgi_params;
     fastcgi_param SCRIPT_FILENAME /usr/local/bin/mongo_monitor.sh;
   }
 }
 EOF
+
+# Fix the configuration if the include_if_exists directive is not supported
+if ! nginx -t 2>/dev/null; then
+  echo "Detected older nginx version without include_if_exists support. Adjusting configuration..."
+  
+  # Check if SSL certificates exist
+  if [ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ] && [ -f "/etc/letsencrypt/live/$DOMAIN/privkey.pem" ]; then
+    # Create a configuration with both HTTP and HTTPS
+    cat <<EOF | sudo tee /etc/nginx/conf.d/monitor.conf
+# For HTTP
+server {
+  listen 80;
+  server_name $DOMAIN;
+
+  location = /monitor {
+    fastcgi_pass unix:/var/run/fcgiwrap.socket;
+    include fastcgi_params;
+    fastcgi_param SCRIPT_FILENAME /usr/local/bin/mongo_monitor.sh;
+  }
+}
+
+# For HTTPS
+server {
+  listen 443 ssl;
+  server_name $DOMAIN;
+  
+  ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
+  
+  location = /monitor {
+    fastcgi_pass unix:/var/run/fcgiwrap.socket;
+    include fastcgi_params;
+    fastcgi_param SCRIPT_FILENAME /usr/local/bin/mongo_monitor.sh;
+  }
+}
+EOF
+  else
+    # Create a configuration with only HTTP
+    cat <<EOF | sudo tee /etc/nginx/conf.d/monitor.conf
+server {
+  listen 80;
+  server_name $DOMAIN;
+
+  location = /monitor {
+    fastcgi_pass unix:/var/run/fcgiwrap.socket;
+    include fastcgi_params;
+    fastcgi_param SCRIPT_FILENAME /usr/local/bin/mongo_monitor.sh;
+  }
+}
+EOF
+  fi
+fi
 
 # NOTE: Test and reload nginx
 if sudo nginx -t; then
@@ -174,9 +283,39 @@ else
   exit 1
 fi
 
-# NOTE: Ensure fcgiwrap is running
+# NOTE: Ensure fcgiwrap is running and has correct permissions
+echo "Ensuring fcgiwrap is running and has correct permissions..."
 sudo systemctl enable fcgiwrap
-sudo systemctl start fcgiwrap
+sudo systemctl restart fcgiwrap
+sleep 2
+
+# Always set socket permissions to world-readable/writable to ensure nginx can access it
+FCGI_SOCKET="/var/run/fcgiwrap.socket"
+if [ -S "$FCGI_SOCKET" ]; then
+  echo "Setting fcgiwrap socket permissions to 666..."
+  sudo chmod 666 "$FCGI_SOCKET"
+else
+  echo "Warning: fcgiwrap socket not found at $FCGI_SOCKET after restart."
+  echo "Checking alternative locations..."
+  
+  # Check alternative socket locations
+  ALT_SOCKETS=("/var/run/nginx/fcgiwrap.sock" "/var/lib/nginx/fcgiwrap.socket")
+  for ALT_SOCKET in "${ALT_SOCKETS[@]}"; do
+    if [ -S "$ALT_SOCKET" ]; then
+      echo "Found fcgiwrap socket at $ALT_SOCKET"
+      sudo chmod 666 "$ALT_SOCKET"
+      
+      # Update nginx configuration to use this socket
+      sudo sed -i "s|unix:/var/run/fcgiwrap.socket|unix:$ALT_SOCKET|g" /etc/nginx/conf.d/monitor.conf
+      echo "Updated nginx configuration to use socket at $ALT_SOCKET"
+      break
+    fi
+  done
+fi
+
+# Restart nginx to apply changes
+echo "Restarting nginx to apply changes..."
+sudo systemctl restart nginx
 
 echo "✅ MongoDB monitoring and alerts setup complete for $DOMAIN"
 echo "Health checks will run every 30 seconds and send alerts to $ALERT_EMAIL"
