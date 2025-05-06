@@ -48,7 +48,7 @@ if [ -f "$MONGO_CONF" ]; then
   else
     # Check if net section already exists
     if grep -q "net:" "$MONGO_CONF" && ! grep -q "  tls:" "$MONGO_CONF"; then
-      # Add TLS configuration under existing net section
+      # Add TLS configuration under existing net section (requiring client certificates)
       echo "Adding TLS configuration to existing net section..."
       sudo sed -i '/net:/a\  tls:\n    mode: requireTLS\n    certificateKeyFile: '"$CERT_FILE"'\n    CAFile: '"$CA_FILE"'' "$MONGO_CONF"
       
@@ -124,7 +124,9 @@ fi
 
 # Verify MongoDB is running with TLS
 echo "Waiting for MongoDB to start completely..."
-sleep 5
+
+sleep 10
+
 if sudo systemctl is-active --quiet mongod; then
   echo "✅ MongoDB restarted successfully with TLS configuration"
   
@@ -138,14 +140,20 @@ if sudo systemctl is-active --quiet mongod; then
     MONGO_PORT=$(jq -r '.mongo_port' "$CONFIG_FILE")
     
     if command -v mongosh &> /dev/null; then
-      # Try with localhost
-      echo "Attempting to verify TLS using localhost"
-      if sudo mongosh --host localhost --port $MONGO_PORT --tls -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval "db.adminCommand({ getParameter: 1, tlsMode: 1 })" 2>/dev/null | grep -q "requireTLS"; then
-        echo "✅ MongoDB TLS mode verified using localhost: requireTLS is active"
+      # Try with domain name and client certificate
+      echo "Attempting to verify TLS using domain name"
+      if mongosh --host $DOMAIN --port $MONGO_PORT --tls --tlsCAFile $CA_FILE --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval "db.adminCommand({ getParameter: 1, tlsMode: 1 })" 2>/dev/null | grep -q "requireTLS"; then
+        echo "✅ MongoDB TLS mode verified using domain name: requireTLS is active"
       else
         echo "⚠️ WARNING: MongoDB is running but TLS mode could not be verified."
-        echo "Please check manually with:"
-        echo "mongosh --host localhost --port $MONGO_PORT --tls -u $DB_USERNAME -p <password> --authenticationDatabase admin --eval \"db.adminCommand({ getParameter: 1, tlsMode: 1 })\""
+        echo "This is expected because client certificates are required."
+        echo ""
+        echo "IMPORTANT: To connect to MongoDB, you will need:"
+        echo "1. A client certificate signed by your CA"
+        echo "2. Connect using the domain name that matches your server certificate"
+        echo ""
+        echo "Example connection command:"
+        echo "mongosh --host $DOMAIN --port $MONGO_PORT --tls --tlsCAFile $CA_FILE --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem -u $DB_USERNAME -p <password> --authenticationDatabase admin"
       fi
     else
       echo "⚠️ mongosh not available to verify TLS configuration."
@@ -204,12 +212,12 @@ if [ -f "$CONFIG_FILE" ]; then
   fi
   
   # Check if the node is already initialized (part of a replica set)
-  if mongosh --host localhost --port $MONGO_PORT -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "JSON.stringify(rs.status())" 2>/dev/null | grep -q '"ok":1'; then
+  if mongosh --host $DOMAIN --port $MONGO_PORT --tls --tlsCAFile $CA_FILE --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "JSON.stringify(rs.status())" 2>/dev/null | grep -q '"ok":1'; then
     IS_INITIALIZED=true
     echo "This node is already initialized as part of a replica set."
     
     # Now check if it's primary
-    if mongosh --host localhost --port $MONGO_PORT -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "JSON.stringify(rs.isMaster())" 2>/dev/null | grep -q '"ismaster":true'; then
+    if mongosh --host $DOMAIN --port $MONGO_PORT --tls --tlsCAFile $CA_FILE --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "JSON.stringify(rs.isMaster())" 2>/dev/null | grep -q '"ismaster":true'; then
       IS_PRIMARY=true
       echo "This node is the primary."
     else
@@ -226,7 +234,7 @@ if [ -f "$CONFIG_FILE" ]; then
       echo "Initializing replica set with domain name..."
       
       # Initialize the replica set with the domain name instead of localhost
-      if mongosh --host localhost --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval "
+      if mongosh --host $DOMAIN --port $MONGO_PORT --tls --tlsCAFile $CA_FILE --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval "
         rs.initiate({
           _id: '$REPLICA_SET',
           members: [{ _id: 0, host: '$DOMAIN:$MONGO_PORT' }]
@@ -236,11 +244,11 @@ if [ -f "$CONFIG_FILE" ]; then
         
         # Verify the initialization
         echo "Verifying replica set configuration..."
-        mongosh --host localhost --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "rs.conf().members.forEach(function(m) { print(m.host); })"
+        mongosh --host $DOMAIN --port $MONGO_PORT --tls --tlsCAFile $CA_FILE --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "rs.conf().members.forEach(function(m) { print(m.host); })"
       else
         echo "❌ ERROR: Failed to initialize replica set. You may need to initialize it manually."
         echo "Manual initialization command:"
-        echo "mongosh --host localhost --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval \"rs.initiate({ _id: '$REPLICA_SET', members: [{ _id: 0, host: '$DOMAIN:$MONGO_PORT' }] })\""
+        echo "mongosh --host $DOMAIN --port $MONGO_PORT --tls --tlsCAFile $CA_FILE --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval \"rs.initiate({ _id: '$REPLICA_SET', members: [{ _id: 0, host: '$DOMAIN:$MONGO_PORT' }] })\""
       fi
     elif [ "$IS_INITIALIZED" = true ]; then
       # This is an already initialized primary node, check if we need to update the configuration
@@ -248,13 +256,13 @@ if [ -f "$CONFIG_FILE" ]; then
       
       # Get current replica set configuration
       TEMP_FILE=$(mktemp)
-      if mongosh --host localhost --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "JSON.stringify(rs.conf())" > $TEMP_FILE 2>/dev/null; then
+      if mongosh --host $DOMAIN --port $MONGO_PORT --tls --tlsCAFile $CA_FILE --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "JSON.stringify(rs.conf())" > $TEMP_FILE 2>/dev/null; then
         # Check if any member is using localhost
         if grep -q "localhost" $TEMP_FILE; then
           echo "Found localhost in replica set configuration. Updating to use domain name..."
           
           # Update replica set configuration to use domain name
-          if mongosh --host localhost --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval "
+          if mongosh --host $DOMAIN --port $MONGO_PORT --tls --tlsCAFile $CA_FILE --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval "
             var config = rs.conf();
             for (var i = 0; i < config.members.length; i++) {
               if (config.members[i].host.includes('localhost')) {
@@ -268,11 +276,11 @@ if [ -f "$CONFIG_FILE" ]; then
             
             # Verify the update
             echo "Verifying updated configuration..."
-            mongosh --host localhost --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "rs.conf().members.forEach(function(m) { print(m.host); })"
+            mongosh --host $DOMAIN --port $MONGO_PORT --tls --tlsCAFile $CA_FILE --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "rs.conf().members.forEach(function(m) { print(m.host); })"
           else
             echo "⚠️ WARNING: Failed to update replica set configuration. You may need to update it manually."
             echo "Manual update command:"
-            echo "mongosh --host localhost --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval \"var config = rs.conf(); config.members[0].host = '$DOMAIN:$MONGO_PORT'; rs.reconfig(config);\""
+            echo "mongosh --host $DOMAIN --port $MONGO_PORT --tls --tlsCAFile $CA_FILE --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval \"var config = rs.conf(); config.members[0].host = '$DOMAIN:$MONGO_PORT'; rs.reconfig(config);\""
           fi
         else
           echo "Replica set configuration already using domain name. No update needed."
@@ -309,4 +317,11 @@ fi
 
 echo "✅ TLS configuration complete"
 echo "MongoDB is now configured to use TLS with the certificate at $CERT_FILE"
-echo "Clients will need to connect using TLS"
+echo ""
+echo "IMPORTANT: Client certificates are required for connections"
+echo "To connect to MongoDB, you will need:"
+echo "1. A client certificate signed by your CA"
+echo "2. Connect using the domain name that matches your server certificate"
+echo ""
+echo "Example connection command:"
+echo "mongosh --host $DOMAIN --port $MONGO_PORT --tls --tlsCAFile $CA_FILE --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem -u $DB_USERNAME -p <password> --authenticationDatabase admin"

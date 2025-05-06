@@ -46,7 +46,9 @@ create_backup() {
   
   # Use the exact command that works
   if [ "$tls_enabled" = "true" ]; then
-    TLS_ARG="--ssl"
+    TLS_ARG="--ssl --sslCAFile $CA_FILE --sslPEMKeyFile /etc/ssl/mongodb/client.pem"
+    echo "NOTE: Client certificates are required for connections."
+    echo "      Ensure the client certificate exists at /etc/ssl/mongodb/client.pem"
   else
     TLS_ARG=""
   fi

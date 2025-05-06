@@ -22,7 +22,9 @@ TLS_ARGS=""
 
 if [ -f "$CERT_FILE" ] && grep -q "tls:" /etc/mongod.conf && grep -q "mode: requireTLS" /etc/mongod.conf; then
   echo "MongoDB TLS is enabled. Using TLS connection..."
-  TLS_ARGS="--tls"
+  echo "NOTE: Client certificates are required for connections."
+  TLS_ARGS="--tls --tlsCAFile $CA_FILE --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem"
+  echo "IMPORTANT: Ensure the client certificate exists at /etc/ssl/mongodb/client.pem"
 elif grep -q "ssl:" /etc/mongod.conf && grep -q "mode: requireSSL" /etc/mongod.conf; then
   # For backward compatibility with older configurations
   echo "MongoDB SSL is enabled. Using SSL connection..."

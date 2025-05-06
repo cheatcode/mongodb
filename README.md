@@ -162,24 +162,83 @@ The provision_ssl script configures MongoDB to use pre-generated private CA cert
 
    Replace `/path/to/your/certificate.pem` and `/path/to/your/ca_certificate.pem` with the actual paths to your certificate files.
 
-2. **Run the TLS provisioning script**:
+2. **Generate a client certificate** (required for connecting to MongoDB):
+
+   You'll need to create a client certificate signed by the same CA that signed your server certificate. If you're using the certificate generation script from the repository, you can add a function to generate client certificates:
+
+   ```javascript
+   const generate_client_certificate = (client_name) => {
+     const ca_key = 'ca.key';
+     const ca_crt = 'ca.crt';
+     const client_key = `${client_name}.key`;
+     const client_csr = `${client_name}.csr`;
+     const client_crt = `${client_name}.crt`;
+     const client_pem = `${client_name}.pem`;
+     
+     // Generate client key
+     execSync(`openssl genrsa -out ${client_key} 2048`);
+     
+     // Generate CSR
+     execSync(`openssl req -new -key ${client_key} -out ${client_csr} -subj "/CN=${client_name}"`);
+     
+     // Sign with CA
+     execSync(`openssl x509 -req -in ${client_csr} -CA ${ca_crt} -CAkey ${ca_key} -CAcreateserial -out ${client_crt} -days 7300 -sha256`);
+     
+     // Create combined PEM file
+     const crtContent = fs.readFileSync(client_crt);
+     const keyContent = fs.readFileSync(client_key);
+     fs.writeFileSync(client_pem, Buffer.concat([crtContent, keyContent]));
+     
+     return client_pem;
+   };
+   ```
+
+3. **Run the TLS provisioning script**:
 
    ```bash
    ./provision_ssl.sh
    ```
 
-3. **What the provision_ssl script does**:
+4. **What the provision_ssl script does**:
    - Checks for the existence of the certificate files
    - Updates the MongoDB configuration to use TLS with proper settings
    - Configures MongoDB to allow connections from outside the server (bindIp: 0.0.0.0)
+   - Adds the replica set configuration
+   - Initializes the replica set using the domain name from config.json
    - Restarts MongoDB with the new TLS configuration
 
-3. **Verify TLS is working**:
+5. **Connecting to MongoDB with client certificates**:
 
-   The script will verify that MongoDB is running with TLS. You can also check manually:
+   After running provision_ssl.sh, you must use client certificates to connect:
 
    ```bash
-   sudo mongosh --host your-domain.com --port $MONGO_PORT --tls -u admin -p your_password --authenticationDatabase admin --eval "db.adminCommand({ getParameter: 1, tlsMode: 1 })"
+   mongosh --host your-domain.com --port $MONGO_PORT --tls --tlsCAFile /etc/ssl/mongodb/certificate_authority.pem --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem -u admin -p your_password --authenticationDatabase admin
+   ```
+
+   Ensure the client certificate exists at `/etc/ssl/mongodb/client.pem`.
+
+   **For GUI tools like Studio 3T**:
+   
+   You'll need to configure the connection to use:
+   - TLS/SSL enabled
+   - CA file: `/etc/ssl/mongodb/certificate_authority.pem`
+   - Client certificate: Your generated client.pem file
+   - Authentication: Username/Password with admin database
+
+   **For application connections**:
+   
+   In your application code, you'll need to specify both the CA file and client certificate:
+   
+   ```
+   mongodb://admin:password@your-domain.com:27017/?tls=true&tlsCAFile=/etc/ssl/mongodb/certificate_authority.pem&tlsCertificateKeyFile=/etc/ssl/mongodb/client.pem&authSource=admin
+   ```
+
+6. **Verify TLS is working**:
+
+   The script will attempt to verify that MongoDB is running with TLS. You can also check manually, but remember you'll need to use your client certificate:
+
+   ```bash
+   mongosh --host your-domain.com --port $MONGO_PORT --tls --tlsCAFile /etc/ssl/mongodb/certificate_authority.pem --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem -u admin -p your_password --authenticationDatabase admin --eval "db.adminCommand({ getParameter: 1, tlsMode: 1 })"
    ```
 
    Replace `$MONGO_PORT` with the port you specified in config.json.
@@ -304,7 +363,7 @@ Example output:
   ],
   "tls_enabled": true,
   "replica_set": "rs0",
-  "connection_string": "mongodb://admin:your_secure_password@mdb1.example.com:27017,mdb2.example.com:27017/?tls=true&authSource=admin&replicaSet=rs0"
+  "connection_string": "mongodb://admin:your_secure_password@mdb1.example.com:27017,mdb2.example.com:27017/?tls=true&tlsCAFile=/etc/ssl/mongodb/certificate_authority.pem&tlsCertificateKeyFile=/etc/ssl/mongodb/client.pem&authSource=admin&replicaSet=rs0"
 }
 ```
 
@@ -315,10 +374,10 @@ For security best practices, you should regularly rotate the MongoDB admin passw
 1. **Connect to the primary node**:
 
    ```bash
-   mongosh --host your-domain.com --port $MONGO_PORT --tls -u admin -p current_password --authenticationDatabase admin
+   mongosh --host your-domain.com --port $MONGO_PORT --tls --tlsCAFile /etc/ssl/mongodb/certificate_authority.pem --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem -u admin -p current_password --authenticationDatabase admin
    ```
 
-   Replace `$MONGO_PORT` with the port you specified in config.json, and `current_password` with your current password.
+   Replace `$MONGO_PORT` with the port you specified in config.json and `current_password` with your current password.
 
 2. **Change the admin user's password**:
 
@@ -341,9 +400,9 @@ For security best practices, you should regularly rotate the MongoDB admin passw
 4. **Verify the new password**:
 
    ```bash
-   mongosh --host your-domain.com --port $MONGO_PORT --tls -u admin -p new_secure_password --authenticationDatabase admin --eval "db.adminCommand('ping')"
+   mongosh --host your-domain.com --port $MONGO_PORT --tls --tlsCAFile /etc/ssl/mongodb/certificate_authority.pem --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem -u admin -p new_secure_password --authenticationDatabase admin --eval "db.adminCommand('ping')"
    ```
-
+   
    You should see a successful response with `{ ok: 1 }`.
 
 5. **Password Rotation Schedule**:
@@ -408,7 +467,7 @@ If you encounter issues during the setup process, here are some common troublesh
 4. **Test MongoDB connection with TLS**:
 
    ```bash
-   sudo mongosh --host your-domain.com --port $MONGO_PORT --tls -u admin -p your_password --authenticationDatabase admin
+   mongosh --host your-domain.com --port $MONGO_PORT --tls --tlsCAFile /etc/ssl/mongodb/certificate_authority.pem --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem -u admin -p your_password --authenticationDatabase admin
    ```
 
    Replace `$MONGO_PORT` with the port you specified in config.json and `your-domain.com` with your actual domain name.

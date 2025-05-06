@@ -91,6 +91,16 @@ net:
   bindIp: 127.0.0.1
 EOF
 
+# Ensure MongoDB can resolve its own domain name
+echo "Checking if domain is in /etc/hosts..."
+if ! grep -q "$DOMAIN" /etc/hosts; then
+  echo "Adding $DOMAIN to /etc/hosts..."
+  echo "127.0.1.1 $DOMAIN" | sudo tee -a /etc/hosts
+  echo "Added $DOMAIN to /etc/hosts"
+else
+  echo "Domain $DOMAIN already in /etc/hosts"
+fi
+
 # Store the replica set name for provision_ssl.sh to use later
 echo "$REPLICA_SET" > /tmp/mongodb_replica_set
 

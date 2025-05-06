@@ -98,7 +98,9 @@ rm $TEMP_FILE
 
 # Build connection string
 if [ "$TLS_ENABLED" = true ]; then
-  CONNECTION_STRING="mongodb://$DB_USERNAME:$DB_PASSWORD@$(echo $HOSTS_JSON | jq -r 'map(.hostname + ":" + .port) | join(",")' || echo "$CONNECTION_DOMAIN:$MONGO_PORT")/?tls=true&authSource=admin&replicaSet=$REPLICA_SET"
+  CONNECTION_STRING="mongodb://$DB_USERNAME:$DB_PASSWORD@$(echo $HOSTS_JSON | jq -r 'map(.hostname + ":" + .port) | join(",")' || echo "$CONNECTION_DOMAIN:$MONGO_PORT")/?tls=true&tlsCAFile=$CA_FILE&tlsCertificateKeyFile=/etc/ssl/mongodb/client.pem&authSource=admin&replicaSet=$REPLICA_SET"
+  echo "NOTE: The connection string includes client certificate path."
+  echo "      Ensure the client certificate exists at /etc/ssl/mongodb/client.pem"
 else
   CONNECTION_STRING="mongodb://$DB_USERNAME:$DB_PASSWORD@$(echo $HOSTS_JSON | jq -r 'map(.hostname + ":" + .port) | join(",")' || echo "$CONNECTION_DOMAIN:$MONGO_PORT")/?authSource=admin&replicaSet=$REPLICA_SET"
 fi
