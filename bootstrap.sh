@@ -201,11 +201,24 @@ log() {
 
 log "Starting MongoDB backup process"
 
+# Load configuration values from config.json
+CONFIG_FILE="./config.json"
+if [ ! -f "\$CONFIG_FILE" ]; then
+  log "❌ ERROR: Missing config.json! Exiting."
+  exit 1
+fi
+
+DB_USERNAME=\$(jq -r '.db_username' "\$CONFIG_FILE")
+DB_PASSWORD=\$(jq -r '.db_password' "\$CONFIG_FILE")
+AWS_BUCKET=\$(jq -r '.aws_bucket' "\$CONFIG_FILE")
+AWS_REGION=\$(jq -r '.aws_region' "\$CONFIG_FILE")
+MONGO_PORT=\$(jq -r '.mongo_port' "\$CONFIG_FILE")
+
 TIMESTAMP=\$(date +%F-%H-%M)
 BACKUP_PATH="/tmp/mongo-backup-\$TIMESTAMP.gz"
 
 # Get domain name from config.json if available
-DOMAIN_CONFIG=\$(jq -r '.domain_name' "$CONFIG_FILE")
+DOMAIN_CONFIG=\$(jq -r '.domain_name' "\$CONFIG_FILE")
 if [ -n "\$DOMAIN_CONFIG" ] && [ "\$DOMAIN_CONFIG" != "null" ] && [ "\$DOMAIN_CONFIG" != "your.domain.com" ]; then
   HOSTNAME="\$DOMAIN_CONFIG"
   log "Using domain name from config.json: \$HOSTNAME"
@@ -225,28 +238,35 @@ CERT_FILE="/etc/ssl/mongodb/certificate.pem"
 CA_FILE="/etc/ssl/mongodb/certificate_authority.pem"
 TLS_ENABLED=false
 TLS_ARG=""
+MONGOSH_TLS_ARG=""
 
-if [ -f "$CERT_FILE" ] && grep -q "tls:" /etc/mongod.conf && grep -q "mode: requireTLS" /etc/mongod.conf; then
+if [ -f "\$CERT_FILE" ] && grep -q "tls:" /etc/mongod.conf && grep -q "mode: requireTLS" /etc/mongod.conf; then
   log "MongoDB TLS is enabled with private CA certificates. Using TLS connection for backup..."
   TLS_ENABLED=true
-  TLS_ARG="--ssl"
+  # For mongodump, use --ssl flags
+  TLS_ARG="--ssl --sslCAFile \$CA_FILE --sslPEMKeyFile /etc/ssl/mongodb/client.pem"
+  # For mongosh, use --tls flags
+  MONGOSH_TLS_ARG="--tls --tlsCAFile \$CA_FILE --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem"
+  log "NOTE: Client certificates are required for connections."
+  log "      Ensure the client certificate exists at /etc/ssl/mongodb/client.pem"
 elif grep -q "ssl:" /etc/mongod.conf && grep -q "mode: requireSSL" /etc/mongod.conf; then
   log "MongoDB SSL is enabled (legacy configuration). Using SSL connection for backup..."
   TLS_ENABLED=true
   TLS_ARG="--ssl"
+  MONGOSH_TLS_ARG="--tls"
 else
   log "MongoDB TLS is not enabled. Using standard connection for backup..."
 fi
 
-# Check if MongoDB is responsive
-if ! mongosh --host \$HOSTNAME --port $MONGO_PORT \$TLS_ARG -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval "db.adminCommand('ping')" &>/dev/null; then
+# Check if MongoDB is responsive - use mongosh with --tls flags
+if ! mongosh --host \$HOSTNAME --port \$MONGO_PORT \$MONGOSH_TLS_ARG -u \$DB_USERNAME -p \$DB_PASSWORD --authenticationDatabase admin --eval "db.adminCommand('ping')" &>/dev/null; then
   log "❌ ERROR: MongoDB is not responsive. Backup aborted."
   exit 1
 fi
 
-# Create backup
+# Create backup - use mongodump with --ssl flags
 log "Creating backup at \$BACKUP_PATH"
-if mongodump --host \$HOSTNAME --port $MONGO_PORT \$TLS_ARG -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --archive=\$BACKUP_PATH --gzip; then
+if mongodump --host \$HOSTNAME --port \$MONGO_PORT \$TLS_ARG -u \$DB_USERNAME -p \$DB_PASSWORD --authenticationDatabase admin --archive=\$BACKUP_PATH --gzip; then
   log "✅ Backup created successfully"
   
   # Check if backup file exists and has a size greater than 0
@@ -255,7 +275,7 @@ if mongodump --host \$HOSTNAME --port $MONGO_PORT \$TLS_ARG -u $DB_USERNAME -p $
     
     # Upload to S3
     log "Uploading backup to S3..."
-    if aws s3 cp \$BACKUP_PATH s3://$AWS_BUCKET/\$HOSTNAME/\$TIMESTAMP.gz --region $AWS_REGION; then
+    if aws s3 cp \$BACKUP_PATH s3://\$AWS_BUCKET/\$HOSTNAME/\$TIMESTAMP.gz --region \$AWS_REGION; then
       log "✅ Backup uploaded to S3 successfully"
       
       # Clean up local backup
@@ -264,7 +284,7 @@ if mongodump --host \$HOSTNAME --port $MONGO_PORT \$TLS_ARG -u $DB_USERNAME -p $
       
       # Manage retention (keep only the 10 most recent backups)
       log "Managing backup retention..."
-      BACKUPS=\$(aws s3 ls s3://$AWS_BUCKET/\$HOSTNAME/ --region $AWS_REGION | awk '{print \$4}' | sort)
+      BACKUPS=\$(aws s3 ls s3://\$AWS_BUCKET/\$HOSTNAME/ --region \$AWS_REGION | awk '{print \$4}' | sort)
       BACKUP_COUNT=\$(echo "\$BACKUPS" | wc -l)
       
       if [ \$BACKUP_COUNT -gt 10 ]; then
@@ -273,7 +293,7 @@ if mongodump --host \$HOSTNAME --port $MONGO_PORT \$TLS_ARG -u $DB_USERNAME -p $
         
         log "Keeping 10 most recent backups, deleting \$DELETE_COUNT older backups"
         for FILE in \$OLD_BACKUPS; do
-          if aws s3 rm s3://$AWS_BUCKET/\$HOSTNAME/\$FILE --region $AWS_REGION; then
+          if aws s3 rm s3://\$AWS_BUCKET/\$HOSTNAME/\$FILE --region \$AWS_REGION; then
             log "Deleted old backup: \$FILE"
           else
             log "Failed to delete old backup: \$FILE"
