@@ -17,7 +17,8 @@ This repository contains a comprehensive set of scripts for deploying, securing,
 9. [Password Rotation](#password-rotation)
 10. [Backup and Restore](#backup-and-restore)
 11. [Troubleshooting](#troubleshooting)
-12. [Reset and Cleanup](#reset-and-cleanup)
+12. [Scaling](#scaling)
+13. [Reset and Cleanup](#reset-and-cleanup)
 
 ## Overview
 
@@ -486,6 +487,28 @@ If you encounter issues during the setup process, here are some common troublesh
    ```bash
    curl -v "http://your-domain.com/monitor?token=your_secure_monitor_token"
    ```
+
+## Scaling
+
+Scaling is managed directly via your host. Before scaling, ALWAYS make sure to take a manual backup and confirm it:
+
+```
+./utils/create_backup.sh
+```
+
+This will take a manual snapshot and upload it to S3. You can pass an additional prefix like this: `./utils/create_backup.sh <prefix>` where `<prefix>` is something like `before_scale`.
+
+After this, just use the manual scaling GUI on your host. If need be, once the server restarts, you can do a manual restore from the backup you took with:
+
+```
+./utils/restore_backup.sh <timestamp>
+```
+
+You can get the specific backup timestamp by running:
+
+```
+./utils/list_backups.sh
+```
 
 ## Reset and Cleanup
 
