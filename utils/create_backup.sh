@@ -46,9 +46,27 @@ create_backup() {
   
   # Use the exact command that works
   if [ "$tls_enabled" = "true" ]; then
+    # For mongodump, use --ssl flags
     TLS_ARG="--ssl --sslCAFile $CA_FILE --sslPEMKeyFile /etc/ssl/mongodb/client.pem"
+    # For mongosh, use --tls flags
+    MONGOSH_TLS_ARG="--tls --tlsCAFile $CA_FILE --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem"
     echo "NOTE: Client certificates are required for connections."
     echo "      Ensure the client certificate exists at /etc/ssl/mongodb/client.pem"
+    
+    # Check if MongoDB is responsive first
+    echo "Checking if MongoDB is responsive..."
+    echo "Running command: mongosh --host $host --port $MONGO_PORT $MONGOSH_TLS_ARG -u $DB_USERNAME -p [PASSWORD] --authenticationDatabase admin --eval \"db.adminCommand('ping')\""
+    
+    MONGO_CHECK_OUTPUT=$(mktemp)
+    if ! mongosh --host $host --port $MONGO_PORT $MONGOSH_TLS_ARG -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval "db.adminCommand('ping')" > $MONGO_CHECK_OUTPUT 2>&1; then
+      echo "❌ ERROR: MongoDB is not responsive. Backup aborted."
+      echo "Error output from command:"
+      cat $MONGO_CHECK_OUTPUT
+      rm -f $MONGO_CHECK_OUTPUT
+      return 1
+    fi
+    echo "✅ MongoDB is responsive."
+    rm -f $MONGO_CHECK_OUTPUT
   else
     TLS_ARG=""
   fi

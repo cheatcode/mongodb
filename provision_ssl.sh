@@ -139,14 +139,35 @@ if sudo systemctl is-active --quiet mongod; then
     DB_PASSWORD=$(jq -r '.db_password' "$CONFIG_FILE")
     MONGO_PORT=$(jq -r '.mongo_port' "$CONFIG_FILE")
     
+    # Get domain name from config.json
+    DOMAIN_CONFIG=$(jq -r '.domain_name' "$CONFIG_FILE")
+    if [ -n "$DOMAIN_CONFIG" ] && [ "$DOMAIN_CONFIG" != "null" ] && [ "$DOMAIN_CONFIG" != "your.domain.com" ]; then
+      DOMAIN="$DOMAIN_CONFIG"
+      echo "Using domain name from config.json: $DOMAIN"
+    else
+      DOMAIN="localhost"
+      echo "Domain name not set in config.json. Using localhost for connection."
+    fi
+    
     if command -v mongosh &> /dev/null; then
       # Try with domain name and client certificate
-      echo "Attempting to verify TLS using domain name"
-      if mongosh --host $DOMAIN --port $MONGO_PORT --tls --tlsCAFile $CA_FILE --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval "db.adminCommand({ getParameter: 1, tlsMode: 1 })" 2>/dev/null | grep -q "requireTLS"; then
-        echo "✅ MongoDB TLS mode verified using domain name: requireTLS is active"
+      echo "Attempting to verify TLS using domain name: $DOMAIN"
+      echo "Running command: mongosh --host $DOMAIN --port $MONGO_PORT --tls --tlsCAFile $CA_FILE --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem -u $DB_USERNAME -p [PASSWORD] --authenticationDatabase admin --eval \"db.adminCommand({ getParameter: 1, tlsMode: 1 })\""
+      
+      # Create a temporary file to capture the output and errors
+      TLS_CHECK_OUTPUT=$(mktemp)
+      if mongosh --host $DOMAIN --port $MONGO_PORT --tls --tlsCAFile $CA_FILE --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval "db.adminCommand({ getParameter: 1, tlsMode: 1 })" > $TLS_CHECK_OUTPUT 2>&1; then
+        if grep -q "requireTLS" $TLS_CHECK_OUTPUT; then
+          echo "✅ MongoDB TLS mode verified using domain name: requireTLS is active"
+        else
+          echo "⚠️ WARNING: Command succeeded but TLS mode could not be verified."
+          echo "Output from command:"
+          cat $TLS_CHECK_OUTPUT
+        fi
       else
         echo "⚠️ WARNING: MongoDB is running but TLS mode could not be verified."
-        echo "This is expected because client certificates are required."
+        echo "Error output from command:"
+        cat $TLS_CHECK_OUTPUT
         echo ""
         echo "IMPORTANT: To connect to MongoDB, you will need:"
         echo "1. A client certificate signed by your CA"
@@ -155,6 +176,7 @@ if sudo systemctl is-active --quiet mongod; then
         echo "Example connection command:"
         echo "mongosh --host $DOMAIN --port $MONGO_PORT --tls --tlsCAFile $CA_FILE --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem -u $DB_USERNAME -p <password> --authenticationDatabase admin"
       fi
+      rm -f $TLS_CHECK_OUTPUT
     else
       echo "⚠️ mongosh not available to verify TLS configuration."
       echo "MongoDB is running, but please verify TLS configuration manually."

@@ -259,10 +259,20 @@ else
 fi
 
 # Check if MongoDB is responsive - use mongosh with --tls flags
-if ! mongosh --host \$HOSTNAME --port \$MONGO_PORT \$MONGOSH_TLS_ARG -u \$DB_USERNAME -p \$DB_PASSWORD --authenticationDatabase admin --eval "db.adminCommand('ping')" &>/dev/null; then
+log "Checking if MongoDB is responsive..."
+log "Running command: mongosh --host \$HOSTNAME --port \$MONGO_PORT \$MONGOSH_TLS_ARG -u \$DB_USERNAME -p [PASSWORD] --authenticationDatabase admin --eval \"db.adminCommand('ping')\""
+
+# Create a temporary file to capture the output and errors
+MONGO_CHECK_OUTPUT=\$(mktemp)
+if ! mongosh --host \$HOSTNAME --port \$MONGO_PORT \$MONGOSH_TLS_ARG -u \$DB_USERNAME -p \$DB_PASSWORD --authenticationDatabase admin --eval "db.adminCommand('ping')" > \$MONGO_CHECK_OUTPUT 2>&1; then
   log "❌ ERROR: MongoDB is not responsive. Backup aborted."
+  log "Error output from command:"
+  cat \$MONGO_CHECK_OUTPUT >> \$LOG_FILE
+  rm -f \$MONGO_CHECK_OUTPUT
   exit 1
 fi
+log "✅ MongoDB is responsive."
+rm -f \$MONGO_CHECK_OUTPUT
 
 # Create backup - use mongodump with --ssl flags
 log "Creating backup at \$BACKUP_PATH"

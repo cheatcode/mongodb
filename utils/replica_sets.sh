@@ -51,27 +51,55 @@ execute_mongo_command() {
   # Try to connect using the domain name first (if not localhost)
   if [ "$DOMAIN" != "localhost" ]; then
     echo "Attempting to connect to MongoDB using domain name: $DOMAIN"
-    if mongosh --host $DOMAIN --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval "$command" 2>/dev/null; then
+    echo "Running command: mongosh --host $DOMAIN --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p [PASSWORD] --authenticationDatabase admin --eval \"$command\""
+    
+    # Create a temporary file to capture the output and errors
+    MONGO_OUTPUT=$(mktemp)
+    if mongosh --host $DOMAIN --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval "$command" > $MONGO_OUTPUT 2>&1; then
       echo "✅ Successfully connected to MongoDB using domain name: $DOMAIN"
+      echo "Command output:"
+      cat $MONGO_OUTPUT
+      rm -f $MONGO_OUTPUT
       return 0
     else
-      echo "Connection using domain name failed. Trying localhost..."
-      if mongosh --host localhost --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval "$command" 2>/dev/null; then
+      echo "Connection using domain name failed. Error output:"
+      cat $MONGO_OUTPUT
+      rm -f $MONGO_OUTPUT
+      
+      echo "Trying localhost instead..."
+      MONGO_OUTPUT=$(mktemp)
+      echo "Running command: mongosh --host localhost --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p [PASSWORD] --authenticationDatabase admin --eval \"$command\""
+      if mongosh --host localhost --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval "$command" > $MONGO_OUTPUT 2>&1; then
         echo "✅ Successfully connected to MongoDB using localhost."
+        echo "Command output:"
+        cat $MONGO_OUTPUT
+        rm -f $MONGO_OUTPUT
         return 0
       else
         echo "❌ ERROR: Failed to connect to MongoDB using both domain name and localhost."
+        echo "Error output from localhost attempt:"
+        cat $MONGO_OUTPUT
+        rm -f $MONGO_OUTPUT
         return 1
       fi
     fi
   else
     # Just try localhost
     echo "Attempting to connect to MongoDB using localhost"
-    if mongosh --host localhost --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval "$command" 2>/dev/null; then
+    echo "Running command: mongosh --host localhost --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p [PASSWORD] --authenticationDatabase admin --eval \"$command\""
+    
+    MONGO_OUTPUT=$(mktemp)
+    if mongosh --host localhost --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --eval "$command" > $MONGO_OUTPUT 2>&1; then
       echo "✅ Successfully connected to MongoDB using localhost."
+      echo "Command output:"
+      cat $MONGO_OUTPUT
+      rm -f $MONGO_OUTPUT
       return 0
     else
       echo "❌ ERROR: Failed to connect to MongoDB using localhost."
+      echo "Error output:"
+      cat $MONGO_OUTPUT
+      rm -f $MONGO_OUTPUT
       return 1
     fi
   fi
