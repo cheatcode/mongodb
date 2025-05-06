@@ -186,10 +186,10 @@ EOF
 
 sudo chmod +x /usr/local/bin/mongo_monitor.sh
 
-# NOTE: Configure nginx for the monitor endpoint
-echo "Configuring nginx for the monitoring endpoint..."
+# NOTE: Configure nginx for the monitor endpoint (HTTP only)
+echo "Configuring nginx for the monitoring endpoint (HTTP only)..."
 cat <<EOF | sudo tee /etc/nginx/conf.d/monitor.conf
-# This configuration adds the /monitor endpoint to both HTTP and HTTPS servers
+# This configuration adds the /monitor endpoint to HTTP server
 
 # For HTTP
 server {
@@ -202,62 +202,14 @@ server {
     fastcgi_param SCRIPT_FILENAME /usr/local/bin/mongo_monitor.sh;
   }
 }
-
-  # For HTTPS (if private CA certificates are set up)
-  server {
-    listen 443 ssl;
-    server_name $DOMAIN;
-    
-    # These SSL settings will be ignored if the certificate files don't exist
-    ssl_certificate /etc/ssl/mongodb/certificate_authority.pem;
-    ssl_certificate_key /etc/ssl/mongodb/certificate.pem;
-  
-  location = /monitor {
-    fastcgi_pass unix:/var/run/fcgiwrap.socket;
-    include fastcgi_params;
-    fastcgi_param SCRIPT_FILENAME /usr/local/bin/mongo_monitor.sh;
-  }
-}
 EOF
 
-# Fix the configuration if the include_if_exists directive is not supported
+# Fix the configuration if needed
 if ! nginx -t 2>/dev/null; then
-  echo "Detected older nginx version without include_if_exists support. Adjusting configuration..."
+  echo "Detected nginx configuration issue. Adjusting configuration..."
   
-  # Check if SSL certificates exist
-  if [ -f "/etc/ssl/mongodb/certificate_authority.pem" ] && [ -f "/etc/ssl/mongodb/certificate.pem" ]; then
-    # Create a configuration with both HTTP and HTTPS
-    cat <<EOF | sudo tee /etc/nginx/conf.d/monitor.conf
-# For HTTP
-server {
-  listen 80;
-  server_name $DOMAIN;
-
-  location = /monitor {
-    fastcgi_pass unix:/var/run/fcgiwrap.socket;
-    include fastcgi_params;
-    fastcgi_param SCRIPT_FILENAME /usr/local/bin/mongo_monitor.sh;
-  }
-}
-
-# For HTTPS
-server {
-  listen 443 ssl;
-  server_name $DOMAIN;
-  
-  ssl_certificate /etc/ssl/mongodb/certificate_authority.pem;
-  ssl_certificate_key /etc/ssl/mongodb/certificate.pem;
-  
-  location = /monitor {
-    fastcgi_pass unix:/var/run/fcgiwrap.socket;
-    include fastcgi_params;
-    fastcgi_param SCRIPT_FILENAME /usr/local/bin/mongo_monitor.sh;
-  }
-}
-EOF
-  else
-    # Create a configuration with only HTTP
-    cat <<EOF | sudo tee /etc/nginx/conf.d/monitor.conf
+  # Create a configuration with only HTTP
+  cat <<EOF | sudo tee /etc/nginx/conf.d/monitor.conf
 server {
   listen 80;
   server_name $DOMAIN;
@@ -269,7 +221,6 @@ server {
   }
 }
 EOF
-  fi
 fi
 
 # NOTE: Test and reload nginx

@@ -146,7 +146,7 @@ The bootstrap script installs MongoDB, configures it with proper security settin
 
 ## Step 2: Provision TLS Certificates
 
-The provision_ssl script configures MongoDB to use pre-generated private CA certificates for enhanced security. These can be generated using the mongodb-ssl tools on your machine.
+The provision_ssl script configures MongoDB to use pre-generated private CA certificates for enhanced security instead of Let's Encrypt certificates. This approach provides better security and easier maintenance for MongoDB deployments.
 
 1. **Place your private CA certificates in the required locations**:
 
@@ -268,12 +268,14 @@ The monitoring script sets up email alerts and a monitoring endpoint for your Mo
 
 3. **Access the monitoring endpoint**:
 
-   You can access the monitoring endpoint at:
+   You can access the monitoring endpoint via HTTP at:
    ```
    http://your-domain.com/monitor?token=your_secure_monitor_token
    ```
 
    Replace `your_secure_monitor_token` with the value you set in `config.json`.
+   
+   Note: The monitoring endpoint is only available over HTTP, not HTTPS, as it uses a simple configuration that doesn't require SSL certificates.
 
 4. **Email alerts**:
 
