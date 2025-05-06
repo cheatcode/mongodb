@@ -146,7 +146,7 @@ The bootstrap script installs MongoDB, configures it with proper security settin
 
 ## Step 2: Provision TLS Certificates
 
-The provision_ssl script configures MongoDB to use pre-generated private CA certificates for enhanced security.
+The provision_ssl script configures MongoDB to use pre-generated private CA certificates for enhanced security. These can be generated using the mongodb-ssl tools on your machine.
 
 1. **Place your private CA certificates in the required locations**:
 

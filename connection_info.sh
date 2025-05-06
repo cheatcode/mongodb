@@ -55,15 +55,15 @@ TEMP_FILE=$(mktemp)
 # Store the original domain name for the connection string
 CONNECTION_DOMAIN="$DOMAIN"
 
-# Try to connect using the domain name first (if not localhost)
-if [ "$DOMAIN" != "localhost" ]; then
-  echo "Attempting to connect to MongoDB using domain name: $DOMAIN"
-  if mongosh --host $DOMAIN --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "JSON.stringify(rs.status())" > $TEMP_FILE 2>/dev/null; then
-    echo "✅ Successfully connected to MongoDB using domain name: $DOMAIN"
-  else
-    echo "Connection using domain name failed. Trying localhost..."
-    # If that fails, try connecting using localhost
-    if mongosh --host localhost --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "JSON.stringify(rs.status())" > $TEMP_FILE 2>/dev/null; then
+  # Try to connect using the domain name first (if not localhost)
+  if [ "$DOMAIN" != "localhost" ]; then
+    echo "Attempting to connect to MongoDB using domain name: $DOMAIN"
+    if mongosh --host $DOMAIN --port $MONGO_PORT --tls --tlsCAFile $CA_FILE --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "JSON.stringify(rs.status())" > $TEMP_FILE 2>/dev/null; then
+      echo "✅ Successfully connected to MongoDB using domain name: $DOMAIN"
+    else
+      echo "Connection using domain name failed. Trying localhost..."
+      # If that fails, try connecting using localhost
+      if mongosh --host localhost --port $MONGO_PORT --tls --tlsCAFile $CA_FILE --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "JSON.stringify(rs.status())" > $TEMP_FILE 2>/dev/null; then
       echo "✅ Successfully connected to MongoDB using localhost."
       # Note: We're not changing CONNECTION_DOMAIN, only the DOMAIN for the current connection
       DOMAIN="localhost"
@@ -76,7 +76,7 @@ if [ "$DOMAIN" != "localhost" ]; then
 else
   # Just try localhost
   echo "Attempting to connect to MongoDB using localhost"
-  if mongosh --host localhost --port $MONGO_PORT $TLS_ARGS -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "JSON.stringify(rs.status())" > $TEMP_FILE 2>/dev/null; then
+  if mongosh --host localhost --port $MONGO_PORT --tls --tlsCAFile $CA_FILE --tlsCertificateKeyFile /etc/ssl/mongodb/client.pem -u $DB_USERNAME -p $DB_PASSWORD --authenticationDatabase admin --quiet --eval "JSON.stringify(rs.status())" > $TEMP_FILE 2>/dev/null; then
     echo "✅ Successfully connected to MongoDB using localhost."
   else
     echo "❌ ERROR: Failed to connect to MongoDB using localhost."
