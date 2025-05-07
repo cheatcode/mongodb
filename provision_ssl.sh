@@ -50,7 +50,16 @@ if [ -f "$MONGO_CONF" ]; then
     if grep -q "net:" "$MONGO_CONF" && ! grep -q "  tls:" "$MONGO_CONF"; then
       # Add TLS configuration under existing net section (requiring client certificates)
       echo "Adding TLS configuration to existing net section..."
-      sudo sed -i '/net:/a\  tls:\n    mode: requireTLS\n    certificateKeyFile: '"$CERT_FILE"'\n    CAFile: '"$CA_FILE"'' "$MONGO_CONF"
+      
+      # Check if replica certificate exists
+      REPLICA_CERT="/etc/ssl/mongodb/replicas.pem"
+      if [ -f "$REPLICA_CERT" ]; then
+        echo "Using replica certificate for x509 authentication..."
+        sudo sed -i '/net:/a\  tls:\n    mode: requireTLS\n    certificateKeyFile: '"$CERT_FILE"'\n    CAFile: '"$CA_FILE"'\n    clusterFile: '"$REPLICA_CERT"'' "$MONGO_CONF"
+      else
+        echo "Replica certificate not found, using standard TLS configuration..."
+        sudo sed -i '/net:/a\  tls:\n    mode: requireTLS\n    certificateKeyFile: '"$CERT_FILE"'\n    CAFile: '"$CA_FILE"'' "$MONGO_CONF"
+      fi
       
       # Update bindIp to listen on all interfaces
       echo "Updating bindIp to listen on all interfaces..."
@@ -60,6 +69,17 @@ if [ -f "$MONGO_CONF" ]; then
       echo "Updating existing TLS configuration..."
       sudo sed -i '/tls:/,/[a-z]/ s|certificateKeyFile:.*|certificateKeyFile: '"$CERT_FILE"'|' "$MONGO_CONF"
       sudo sed -i '/tls:/,/[a-z]/ s|CAFile:.*|CAFile: '"$CA_FILE"'|' "$MONGO_CONF"
+      
+      # Check if replica certificate exists
+      REPLICA_CERT="/etc/ssl/mongodb/replicas.pem"
+      if [ -f "$REPLICA_CERT" ]; then
+        echo "Using replica certificate for x509 authentication..."
+        if grep -q "clusterFile:" "$MONGO_CONF"; then
+          sudo sed -i '/clusterFile:/c\    clusterFile: '"$REPLICA_CERT"'' "$MONGO_CONF"
+        else
+          sudo sed -i '/CAFile:/a\    clusterFile: '"$REPLICA_CERT"'' "$MONGO_CONF"
+        fi
+      fi
       
       # Remove any relaxed security settings if they exist
       sudo sed -i '/allowConnectionsWithoutCertificates:/d' "$MONGO_CONF"
@@ -72,7 +92,16 @@ if [ -f "$MONGO_CONF" ]; then
     elif ! grep -q "net:" "$MONGO_CONF"; then
       # Add net section with TLS configuration
       echo "Adding new net section with TLS configuration..."
-      echo -e "\nnet:\n  bindIp: 0.0.0.0\n  tls:\n    mode: requireTLS\n    certificateKeyFile: $CERT_FILE\n    CAFile: $CA_FILE" | sudo tee -a "$MONGO_CONF"
+      
+      # Check if replica certificate exists
+      REPLICA_CERT="/etc/ssl/mongodb/replicas.pem"
+      if [ -f "$REPLICA_CERT" ]; then
+        echo "Using replica certificate for x509 authentication..."
+        echo -e "\nnet:\n  bindIp: 0.0.0.0\n  tls:\n    mode: requireTLS\n    certificateKeyFile: $CERT_FILE\n    CAFile: $CA_FILE\n    clusterFile: $REPLICA_CERT" | sudo tee -a "$MONGO_CONF"
+      else
+        echo "Replica certificate not found, using standard TLS configuration..."
+        echo -e "\nnet:\n  bindIp: 0.0.0.0\n  tls:\n    mode: requireTLS\n    certificateKeyFile: $CERT_FILE\n    CAFile: $CA_FILE" | sudo tee -a "$MONGO_CONF"
+      fi
     fi
     
     # Remove any old SSL configuration if it exists
@@ -80,6 +109,43 @@ if [ -f "$MONGO_CONF" ]; then
       echo "Removing deprecated SSL configuration..."
       sudo sed -i '/ssl:/,/[a-z]/ d' "$MONGO_CONF"
     fi
+  fi
+  
+  # Check for replica certificate
+  REPLICA_CERT="/etc/ssl/mongodb/replicas.pem"
+  if [ ! -f "$REPLICA_CERT" ]; then
+    echo "⚠️ WARNING: Replica certificate not found at $REPLICA_CERT"
+    echo "Please ensure the replica certificate is placed at $REPLICA_CERT before running this script."
+    echo "This certificate is required for x509 authentication between replica set members."
+  else
+    echo "✅ Replica certificate found at $REPLICA_CERT"
+    # Ensure proper permissions
+    sudo chmod 600 "$REPLICA_CERT"
+    sudo chown mongodb:mongodb "$REPLICA_CERT"
+  fi
+  
+  # Configure x509 authentication for replica set members
+  REPLICA_CERT="/etc/ssl/mongodb/replicas.pem"
+  if [ -f "$REPLICA_CERT" ]; then
+    echo "Configuring x509 authentication for replica set members..."
+    
+    # Check if security section exists
+    if grep -q "security:" "$MONGO_CONF"; then
+      # Add x509 authentication to existing security section
+      if ! grep -q "clusterAuthMode:" "$MONGO_CONF"; then
+        sudo sed -i '/security:/a\  clusterAuthMode: x509' "$MONGO_CONF"
+      else
+        sudo sed -i '/clusterAuthMode:/c\  clusterAuthMode: x509' "$MONGO_CONF"
+      fi
+    else
+      # Add security section with x509 authentication
+      echo -e "\nsecurity:\n  authorization: enabled\n  clusterAuthMode: x509" | sudo tee -a "$MONGO_CONF"
+    fi
+    
+    echo "✅ x509 authentication configured for replica set members"
+  else
+    echo "⚠️ WARNING: Replica certificate not found at $REPLICA_CERT"
+    echo "x509 authentication for replica set members will not be configured."
   fi
   
   # Add or update replication section

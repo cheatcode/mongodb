@@ -297,7 +297,7 @@ The monitoring script sets up email alerts and a monitoring endpoint for your Mo
 
 ## Managing Replica Sets
 
-If you're setting up a replica set with multiple nodes, you'll need to add secondary nodes to the replica set.
+This deployment uses x509 certificate authentication for replica set members, providing enhanced security compared to the traditional keyFile authentication method.
 
 1. **Set up secondary nodes**:
 
@@ -311,10 +311,13 @@ If you're setting up a replica set with multiple nodes, you'll need to add secon
    sudo mkdir -p /etc/ssl/mongodb
    sudo cp /path/to/your/certificate.pem /etc/ssl/mongodb/certificate.pem
    sudo cp /path/to/your/ca_certificate.pem /etc/ssl/mongodb/certificate_authority.pem
+   sudo cp /path/to/your/replicas.pem /etc/ssl/mongodb/replicas.pem
    sudo chmod 600 /etc/ssl/mongodb/certificate.pem
    sudo chmod 600 /etc/ssl/mongodb/certificate_authority.pem
+   sudo chmod 600 /etc/ssl/mongodb/replicas.pem
    sudo chown mongodb:mongodb /etc/ssl/mongodb/certificate.pem
    sudo chown mongodb:mongodb /etc/ssl/mongodb/certificate_authority.pem
+   sudo chown mongodb:mongodb /etc/ssl/mongodb/replicas.pem
    
    # Configure TLS and set up monitoring
    ./provision_ssl.sh
@@ -322,6 +325,25 @@ If you're setting up a replica set with multiple nodes, you'll need to add secon
    ```
 
    The `provision_ssl.sh` script will automatically get the domain name from your config.json file and use it to configure the replica set.
+   
+   **Note about x509 Authentication**: This deployment uses x509 certificate authentication for replica set members instead of the traditional keyFile method. The x509 certificates provide stronger security and are more flexible for certificate rotation. 
+   
+   The replica certificate should be placed at `/etc/ssl/mongodb/replicas.pem` on each node. This file must contain both the certificate and its private key in PEM format, similar to the server certificate. The certificate should be signed by the same CA as the server certificate.
+   
+   Example of generating a replica certificate:
+   ```bash
+   # Generate private key
+   openssl genrsa -out replicas.key 2048
+   
+   # Generate CSR (Certificate Signing Request)
+   openssl req -new -key replicas.key -out replicas.csr -subj "/CN=mongodb-replicas"
+   
+   # Sign with your CA
+   openssl x509 -req -in replicas.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out replicas.crt -days 7300 -sha256
+   
+   # Combine certificate and key into a single PEM file
+   cat replicas.crt replicas.key > replicas.pem
+   ```
 
 2. **Add secondary nodes to the replica set**:
 

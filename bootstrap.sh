@@ -54,9 +54,9 @@ if [ -z "$MONGO_PORT" ] || [ "$MONGO_PORT" == "null" ]; then
 fi
 MONGO_VERSION=8.0
 MONGO_CONF="/etc/mongod.conf"
-MONGO_KEYFILE="/etc/mongo-keyfile"
 LOG_FILE="/var/log/mongodb/mongod.log"
 BACKUP_SCRIPT="/usr/local/bin/mongo_backup.sh"
+REPLICA_CERT="/etc/ssl/mongodb/replicas.pem"
 
 # NOTE: Install MongoDB 8.0.
 curl -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc | sudo gpg -o /usr/share/keyrings/mongodb-server-8.0.gpg --dearmor
@@ -71,12 +71,9 @@ echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gp
 sudo apt update
 sudo apt install -y mongodb-org
 
-# NOTE: Create Mongo keyfile if missing.
-if [ ! -f "$MONGO_KEYFILE" ]; then
-  echo "$REPLICA_SET_KEY" > "$MONGO_KEYFILE"
-  chmod 400 "$MONGO_KEYFILE"
-  chown mongodb:mongodb "$MONGO_KEYFILE"
-fi
+# NOTE: We'll use x509 certificates for internal authentication instead of keyFile
+echo "MongoDB will use x509 certificates for internal authentication"
+echo "Make sure to place your replica certificate at $REPLICA_CERT"
 
 # NOTE: First create a MongoDB config without authentication and without replication
 cat <<EOF | sudo tee $MONGO_CONF
@@ -142,7 +139,6 @@ net:
   bindIp: 127.0.0.1
 security:
   authorization: enabled
-  keyFile: $MONGO_KEYFILE
 EOF
 
 # Restart MongoDB with authentication enabled
@@ -351,5 +347,6 @@ echo "Next steps:"
 echo "1. Place your private CA certificates at:"
 echo "   - /etc/ssl/mongodb/certificate.pem"
 echo "   - /etc/ssl/mongodb/certificate_authority.pem"
+echo "   - /etc/ssl/mongodb/replicas.pem (for x509 authentication between replica set members)"
 echo "2. Run ./provision_ssl.sh to configure MongoDB to use the certificates."
 echo "3. Run ./monitoring.sh $DOMAIN to set up monitoring and alerts."
