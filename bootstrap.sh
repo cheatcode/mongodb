@@ -198,7 +198,7 @@ log() {
 log "Starting MongoDB backup process"
 
 # Load configuration values from config.json
-CONFIG_FILE="./config.json"
+CONFIG_FILE="/root/mongodb/config.json"
 if [ ! -f "\$CONFIG_FILE" ]; then
   log "❌ ERROR: Missing config.json! Exiting."
   exit 1
@@ -288,16 +288,16 @@ if mongodump --host \$HOSTNAME --port \$MONGO_PORT \$TLS_ARG -u \$DB_USERNAME -p
       rm \$BACKUP_PATH
       log "Local backup file removed"
       
-      # Manage retention (keep only the 10 most recent backups)
+      # Manage retention (keep only the 12 most recent backups)
       log "Managing backup retention..."
       BACKUPS=\$(aws s3 ls s3://\$AWS_BUCKET/\$HOSTNAME/ --region \$AWS_REGION | awk '{print \$4}' | sort)
       BACKUP_COUNT=\$(echo "\$BACKUPS" | wc -l)
       
-      if [ \$BACKUP_COUNT -gt 10 ]; then
-        DELETE_COUNT=\$((BACKUP_COUNT - 10))
+      if [ \$BACKUP_COUNT -gt 12 ]; then
+        DELETE_COUNT=\$((BACKUP_COUNT - 12))
         OLD_BACKUPS=\$(echo "\$BACKUPS" | head -n \$DELETE_COUNT)
         
-        log "Keeping 10 most recent backups, deleting \$DELETE_COUNT older backups"
+        log "Keeping 12 most recent backups, deleting \$DELETE_COUNT older backups"
         for FILE in \$OLD_BACKUPS; do
           if aws s3 rm s3://\$AWS_BUCKET/\$HOSTNAME/\$FILE --region \$AWS_REGION; then
             log "Deleted old backup: \$FILE"
@@ -324,7 +324,10 @@ fi
 log "Backup process completed successfully"
 EOF
   chmod +x $BACKUP_SCRIPT
-  echo "0 2 * * * root $BACKUP_SCRIPT" | sudo tee /etc/cron.d/mongo-backup
+  echo "0 * * * * root $BACKUP_SCRIPT" | sudo tee /etc/cron.d/mongo-backup
+  # Ensure the cron job file has a newline at the end and correct permissions
+  echo "" | sudo tee -a /etc/cron.d/mongo-backup
+  sudo chmod 644 /etc/cron.d/mongo-backup
 fi
 
 # NOTE: Setup UFW rules.
